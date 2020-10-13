@@ -34,7 +34,6 @@
 #include <sys/abd.h>
 #include <sys/burst_dedup.h>
 #include <sys/cmn_err.h>
-#include <sys/mod.h>
 
 static kmem_cache_t *htddt_cache;
 static kmem_cache_t *htddt_entry_cache;
@@ -245,7 +244,7 @@ htddt_entry_compare(const void *x1, const void *x2)
 		if (likely(cmp))
 			break;
 	}
-	return (TREE_ISIGN(cmp));
+	return (AVL_ISIGN(cmp));
 }
 
 uint64_t
@@ -425,7 +424,7 @@ bstt_entry_compare(const void *x1, const void *x2)
 		if (likely(cmp))
 			break;
 	}
-	return (TREE_ISIGN(cmp));
+	return (AVL_ISIGN(cmp));
 }
 
 

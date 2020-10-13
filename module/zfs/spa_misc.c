@@ -2294,6 +2294,8 @@ spa_init(int mode)
 	range_tree_init();
 	metaslab_alloc_trace_init();
 	ddt_init();
+	htddt_init();
+	bstt_init();
 	zio_init();
 	dmu_init();
 	zil_init();

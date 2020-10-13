@@ -564,3 +564,44 @@ zio_checksum_templates_free(spa_t *spa)
 		}
 	}
 }
+
+/*
+ * Compute checksum of head\tail dde.
+ */
+void
+htddt_checksum_compute(spa_t *spa, enum zio_checksum htddt_checksum, abd_t *total_abd, uint64_t total_size, uint64_t ht_size, uint64_t ht_off, zio_cksum_t *cksum)
+{
+	ASSERT(ht_size <= total_size);
+	abd_t *ht_abd = NULL;
+	zio_checksum_info_t *ci = &zio_checksum_table[htddt_checksum];
+
+	ASSERT((uint_t)htddt_checksum < ZIO_CHECKSUM_FUNCTIONS);
+	ASSERT(ci->ci_func[0] != NULL);
+
+	
+	if (ci->ci_flags & ZCHECKSUM_FLAG_EMBEDDED) {
+		ZIO_SET_CHECKSUM(cksum, 0, 0, 0, 0);
+	} else {
+		dprintf("total size: %llu ht_size: %llu ht_off: %llu",total_size,ht_size,ht_off);
+		zio_checksum_template_init(htddt_checksum, spa);
+    	ht_abd = abd_alloc_linear(ht_size, B_FALSE);
+		abd_copy_off(ht_abd, total_abd, 0, ht_off, ht_size);
+		ci->ci_func[0](ht_abd, ht_size, spa->spa_cksum_tmpls[htddt_checksum], cksum);
+
+		// // debug 
+		// void *tmp = abd_borrow_buf_copy(ht_abd, ht_size);
+		// uint64_t len = ht_size < 32 ? ht_size : 32;
+		// dprintf("ht_size: %llu, ht_data(first 32 bytes): [%.*s], last 32 bytes: [%.*s], cksm: %llx-%llx-%llx-%llx",
+		// 	ht_size,
+		// 	len,
+		// 	(char *)tmp,
+		// 	len,
+		// 	(char *)tmp + ht_size - len,
+		// 	cksum->zc_word[0],
+		// 	cksum->zc_word[1],
+		// 	cksum->zc_word[2],
+		// 	cksum->zc_word[3]);
+		// abd_return_buf_copy(ht_abd, tmp, ht_size);
+		abd_free(ht_abd);
+	}
+}

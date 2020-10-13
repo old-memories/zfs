@@ -48,6 +48,7 @@
 #include <sys/dsl_crypt.h>
 #include <sys/zfeature.h>
 #include <sys/zthr.h>
+#include <sys/burst_dedup.h>
 #include <zfeature_common.h>
 
 #ifdef	__cplusplus
@@ -355,6 +356,12 @@ struct spa {
 	uint64_t	spa_dedup_dspace;	/* Cache get_dedup_dspace() */
 	uint64_t	spa_dedup_ditto;	/* dedup ditto threshold */
 	uint64_t	spa_dedup_checksum;	/* default dedup checksum */
+
+	/*burst_dedup data structures */
+	htddt_t *spa_hddt[ZIO_CHECKSUM_FUNCTIONS];
+	htddt_t *spa_tddt[ZIO_CHECKSUM_FUNCTIONS];
+	bstt_t *spa_bstt[ZIO_CHECKSUM_FUNCTIONS]; 
+
 	uint64_t	spa_dspace;		/* dspace in normal class */
 	kmutex_t	spa_vdev_top_lock;	/* dueling offline/remove */
 	kmutex_t	spa_proc_lock;		/* protects spa_proc* */

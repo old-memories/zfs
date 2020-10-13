@@ -505,14 +505,27 @@ ddt_get_dedup_histogram(spa_t *spa, ddt_histogram_t *ddh)
 {
 	for (enum zio_checksum c = 0; c < ZIO_CHECKSUM_FUNCTIONS; c++) {
 		ddt_t *ddt = spa->spa_ddt[c];
+		ddt_entry_t *dde, *dde_next;
+		bzero(&ddt->ddt_histogram, sizeof(ddt_histogram_t));
+		for (dde = avl_first(&ddt->ddt_tree); dde != NULL; dde = dde_next) {
+			dde_next = AVL_NEXT(&ddt->ddt_tree, dde);
+			if (dde->dde_class == DDT_CLASS_DUPLICATE || dde->dde_class == DDT_CLASS_UNIQUE) {
+				ddt_stat_update(ddt, dde, 0);
+		}	 
+ 	}
 		for (enum ddt_type type = 0; type < DDT_TYPES; type++) {
 			for (enum ddt_class class = 0; class < DDT_CLASSES;
 			    class++) {
 				ddt_histogram_add(ddh,
-				    &ddt->ddt_histogram_cache[type][class]);
+				    &ddt->ddt_histogram[type][class]);
 			}
 		}
 	}
+
+	
+
+
+
 }
 
 void
@@ -546,12 +559,71 @@ uint64_t
 ddt_get_pool_dedup_ratio(spa_t *spa)
 {
 	ddt_stat_t dds_total = { 0 };
-
+	
 	ddt_get_dedup_stats(spa, &dds_total);
 	if (dds_total.dds_dsize == 0)
 		return (100);
 	dprintf("dds_ref_dsize: %llu, dds_dsize: %llu",dds_total.dds_ref_dsize,dds_total.dds_dsize);
 	return (dds_total.dds_ref_dsize * 100 / dds_total.dds_dsize);
+}
+
+int
+ddt_ditto_copies_needed(ddt_t *ddt, ddt_entry_t *dde, ddt_phys_t *ddp_willref)
+{
+	spa_t *spa = ddt->ddt_spa;
+	uint64_t total_refcnt = 0;
+	uint64_t ditto = spa->spa_dedup_ditto;
+	int total_copies = 0;
+	int desired_copies = 0;
+	int copies_needed = 0;
+
+	for (int p = DDT_PHYS_SINGLE; p <= DDT_PHYS_TRIPLE; p++) {
+		ddt_phys_t *ddp = &dde->dde_phys[p];
+		zio_t *zio = dde->dde_lead_zio[p];
+		uint64_t refcnt = ddp->ddp_refcnt;	/* committed refs */
+		if (zio != NULL)
+			refcnt += zio->io_parent_count;	/* pending refs */
+		if (ddp == ddp_willref)
+			refcnt++;			/* caller's ref */
+		if (refcnt != 0) {
+			total_refcnt += refcnt;
+			total_copies += p;
+		}
+	}
+
+	if (ditto == 0 || ditto > UINT32_MAX)
+		ditto = UINT32_MAX;
+
+	if (total_refcnt >= 1)
+		desired_copies++;
+	if (total_refcnt >= ditto)
+		desired_copies++;
+	if (total_refcnt >= ditto * ditto)
+		desired_copies++;
+
+	copies_needed = MAX(desired_copies, total_copies) - total_copies;
+
+	/* encrypted blocks store their IV in DVA[2] */
+	if (DDK_GET_CRYPT(&dde->dde_key))
+		copies_needed = MIN(copies_needed, SPA_DVAS_PER_BP - 1);
+
+	return (copies_needed);
+}
+
+int
+ddt_ditto_copies_present(ddt_entry_t *dde)
+{
+	ddt_phys_t *ddp = &dde->dde_phys[DDT_PHYS_DITTO];
+	dva_t *dva = ddp->ddp_dva;
+	int copies = 0 - DVA_GET_GANG(dva);
+
+	for (int d = 0; d < DDE_GET_NDVAS(dde); d++, dva++)
+		if (DVA_IS_VALID(dva))
+			copies++;
+
+	ASSERT(copies >= 0 && copies < SPA_DVAS_PER_BP);
+
+	return (copies);
 }
 
 size_t
@@ -827,7 +899,7 @@ ddt_entry_compare(const void *x1, const void *x2)
 			break;
 	}
 
-	return (TREE_ISIGN(cmp));
+	return (AVL_ISIGN(cmp));
 }
 
 static ddt_t *
@@ -1172,13 +1244,13 @@ ddt_sync_table(ddt_t *ddt, dmu_tx_t *tx, uint64_t txg)
 		if (total_refcnt != 0) {
 			dde->dde_type = ntype;
 			dde->dde_class = nclass;
-			ddt_stat_update(ddt, dde, 0);
+			// ddt_stat_update(ddt, dde, 0);
 		}	 
  	}
 
 	 
-	bcopy(ddt->ddt_histogram, &ddt->ddt_histogram_cache,
-	    sizeof (ddt->ddt_histogram));
+	// bcopy(ddt->ddt_histogram, &ddt->ddt_histogram_cache,
+	//     sizeof (ddt->ddt_histogram));
 
 
 	// if (spa->spa_ddt_stat_object == 0) {
@@ -1288,7 +1360,7 @@ ddt_walk(spa_t *spa, ddt_bookmark_t *ddb, ddt_entry_t *dde)
 	return (SET_ERROR(ENOENT));
 }
 
-/* BEGIN CSTYLED */
-ZFS_MODULE_PARAM(zfs_dedup, zfs_dedup_, prefetch, INT, ZMOD_RW,
-	"Enable prefetching dedup-ed blks");
-/* END CSTYLED */
+#if defined(_KERNEL)
+module_param(zfs_dedup_prefetch, int, 0644);
+MODULE_PARM_DESC(zfs_dedup_prefetch, "Enable prefetching dedup-ed blks");
+#endif

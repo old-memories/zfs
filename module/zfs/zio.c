@@ -47,6 +47,7 @@
 #include <sys/trace_zio.h>
 #include <sys/abd.h>
 #include <sys/dsl_crypt.h>
+#include <sys/burst_dedup.h>
 #include <sys/cityhash.h>
 
 /*
@@ -2920,18 +2921,121 @@ zio_ddt_child_read_done(zio_t *zio)
 	mutex_exit(&pio->io_lock);
 }
 
+static void
+zio_ddt_create_burst(zio_t *zio)
+{
+	burst_t *burst = (burst_t *)zio->io_private;
+	zio_t *based_io = zio;
+	zio_t *new_io = zio_unique_parent(based_io);
+	dprintf("zio_ddt_create_burst start, based_io: %px, new_io: %px", based_io, new_io);
+	// zio_print_abd_data(based_io);
+	// Return new data = based data + burst
+	bstt_create_burst(burst, based_io->io_abd, based_io->io_size, new_io->io_abd, new_io->io_size);
+
+
+	// char *tmp = abd_borrow_buf_copy(burst->data, burst->length);
+	// uint64_t len = burst->length < 32 ? burst->length : 32;
+
+	// dprintf("burst: start_pos: %d, end_pos: %d, length: %lu, first 32 bytes:[%.*s], last 32 bytes: [%.*s], based_io: %px, new_io: %px",
+	//  burst->start_pos,
+	// burst->end_pos,
+	// burst->length,
+	// len,
+	// (char *)tmp,
+	// len,
+	// (char *)tmp + burst->length - len,
+	// based_io,
+	// new_io);
+	// abd_return_buf(burst->data, tmp, burst->length);
+
+
+	abd_free(based_io->io_abd);
+	dprintf("zio_ddt_create_burst end, based_io: %px, new_io: %px", based_io, new_io);
+}
+
+static void
+zio_ddt_create_data(zio_t *zio)
+{
+	burst_t *burst = (burst_t *)zio->io_private;
+	zio_t *based_io = zio;
+	zio_t *new_io = zio_unique_parent(based_io);
+	dprintf("zio_ddt_create_data start, based_io: %px, new_io: %px", based_io, new_io);
+	// zio_print_abd_data(based_io);
+	// Return new data = based data + burst
+	bstt_create_data(burst, based_io->io_abd, based_io->io_size, new_io->io_abd, new_io->io_size);
+
+
+	// char *tmp = abd_borrow_buf_copy(burst->data, burst->length);
+	// uint64_t len = burst->length < 32 ? burst->length : 32;
+	
+	// dprintf("burst: start_pos: %d, end_pos: %d, length: %lu, first 32 bytes:[%.*s], last 32 bytes: [%.*s], based_io: %px, new_io: %px",
+	//  burst->start_pos,
+	// burst->end_pos,
+	// burst->length,
+	// len,
+	// (char *)tmp,
+	// len,
+	// (char *)tmp + burst->length - len,
+	// based_io,
+	// new_io);
+	// abd_return_buf(burst->data, tmp, burst->length);
+
+
+	abd_free(based_io->io_abd);
+	dprintf("zio_ddt_create_data end, based_io: %px, new_io: %px", based_io, new_io);
+}
+
+static zio_t *
+zio_ddt_read_based_data(zio_t *zio, enum zio_checksum ddt_checksum, bstt_phys_t *bstp, zio_done_func_t *done)
+{
+	uint8_t based_ddp_p = bstp->bstp_dde_p;
+	uint64_t based_ddp_abd_size = bstp->bstp_abd_size;
+	ddt_entry_t *based_dde = bstp->bstp_dde;
+	ddt_phys_t *ddp = &(based_dde->dde_phys[based_ddp_p]);
+	burst_t *burst = &(bstp->bstp_burst);
+	blkptr_t based_blk;
+	zio_t *based_io = NULL;
+					
+	dprintf("We have to wait for based_dde's io finishing. zio: %px", zio);
+	if(ddp->ddp_phys_birth == 0){
+		dprintf("ddp->ddp_phys_birth == 0. zio: %px", zio);
+		return(based_io);
+	}
+	dprintf("based_dde's io finished. create zio: %px", zio);
+	ddt_bp_create(ddt_checksum, &(based_dde->dde_key), ddp, &based_blk);
+	based_io = zio_read(zio, zio->io_spa, &based_blk,
+	abd_alloc_linear(based_ddp_abd_size, B_FALSE), based_ddp_abd_size, done, burst, zio->io_priority,
+	ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark);
+	return(based_io);
+}
+
 static zio_t *
 zio_ddt_read_start(zio_t *zio)
 {
 	blkptr_t *bp = zio->io_bp;
+	uint64_t txg = zio->io_txg;
+	ddt_t *ddt = ddt_select(zio->io_spa, bp);
+	ddt_entry_t *dde;
+
+	// burst dedup varibles
+	bstt_t *bstt = bstt_select(zio->io_spa, bp);
+	bstt_entry_t *bste;
+	bstt_key_t bstk_search;
+	//burst_t *burst;
+	boolean_t found_dde = B_FALSE;
+	boolean_t found_bste = B_FALSE;
+	zio_t *based_io =NULL;
+	//blkptr_t based_blk;
+	//uint8_t based_ddp_p;
+	//uint64_t based_abd_size;
 
 	ASSERT(BP_GET_DEDUP(bp));
 	ASSERT(BP_GET_PSIZE(bp) == zio->io_size);
 	ASSERT(zio->io_child_type == ZIO_CHILD_LOGICAL);
-
+	dprintf("zio_ddt_read_start start. zio: %px", zio);
 	if (zio->io_child_error[ZIO_CHILD_DDT]) {
-		ddt_t *ddt = ddt_select(zio->io_spa, bp);
-		ddt_entry_t *dde = ddt_repair_start(ddt, bp);
+		dprintf("TRUE: zio->io_child_error[ZIO_CHILD_DDT]");	
+		dde = ddt_repair_start(ddt, bp);
 		ddt_phys_t *ddp = dde->dde_phys;
 		ddt_phys_t *ddp_self = ddt_phys_select(dde, bp);
 		blkptr_t blk;
@@ -2956,10 +3060,64 @@ zio_ddt_read_start(zio_t *zio)
 		return (zio);
 	}
 
-	zio_nowait(zio_read(zio, zio->io_spa, bp,
-	    zio->io_abd, zio->io_size, NULL, NULL, zio->io_priority,
-	    ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark));
+	// find bste in bstt
+	ddt_enter(ddt);
+	dprintf("ddt entered. ddt: %px, zio: %px", ddt, zio);
+	// bstt_enter(bstt);
+	dde = NULL;
+	bstk_search.bstk_cksum = bp->blk_cksum;
+	dprintf("find bste in bstt zio: %px", zio);	
+	bste = bstt_lookup(bstt, &bstk_search, B_FALSE, &found_bste);
+	if(found_bste && bste != NULL && bste->bstt_phys.valid){
+		if(ddt_exist(ddt, bste->bstt_phys.bstp_dde)){
+			dde = bste->bstt_phys.bstp_dde;
+			dprintf("ddt exited. ddt: %px, zio: %px", ddt, zio);
+			ddt_exit(ddt);
+			dprintf("one valid based dde found. zio: %px", zio);
 
+			dprintf("read based data, zio: %px", zio);
+			based_io = zio_ddt_read_based_data(zio, ddt->ddt_checksum, &(bste->bstt_phys), zio_ddt_create_data);
+			if(based_io == NULL){
+				dprintf("based_data not ready, restart current zio: %px", zio);
+				zio_pop_transforms(zio);
+				zio->io_stage = ZIO_STAGE_OPEN;
+				zio->io_pipeline = ZIO_READ_PIPELINE;
+				BP_ZERO(bp);
+				return (zio);
+			}
+			dprintf("bstt_bp_fill: based_ddp used to fill bp, zio: %px", zio);
+			bstt_bp_fill(&(bste->bstt_phys), bp, txg);
+			zio_nowait(based_io);
+			dprintf("zio_ddt_read_start end. zio: %px", zio);
+			return (zio);
+		}
+		bste->bstt_phys.valid = B_FALSE;
+		dprintf("bste: %px 's based dde did not exist in ddt: %px , zio: %px", bste, ddt, zio);
+	}
+	dprintf("No bste found, lookup in ddt: %px , zio: %px", ddt, zio);
+	// find dde in ddt
+	dde = NULL;
+	dprintf("first lookup ddt(through checksum+prop), cksm: %llx-%llx-%llx-%llx, prop: %llu, zio: %px",
+		bp->blk_cksum.zc_word[0],
+		bp->blk_cksum.zc_word[1],
+		bp->blk_cksum.zc_word[2],
+		bp->blk_cksum.zc_word[3],
+		bp->blk_prop,
+		zio);	
+	dde = ddt_lookup(ddt, bp, B_FALSE, &found_dde);
+	dprintf("ddt exited. ddt: %px, zio: %px", ddt, zio);
+	ddt_exit(ddt);
+	if(found_dde){
+		dprintf("ddt_lookup: found dde zio: %px", zio);	
+		zio_nowait(zio_read(zio, zio->io_spa, bp,
+	    zio->io_abd, zio->io_size, NULL, NULL, zio->io_priority,
+	    ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark));	
+	}
+	else{
+		dprintf("could not happen! zio: %px", zio);	
+	}
+
+	dprintf("zio_ddt_read_start end. zio: %px", zio);
 	return (zio);
 }
 
@@ -2967,8 +3125,10 @@ static zio_t *
 zio_ddt_read_done(zio_t *zio)
 {
 	blkptr_t *bp = zio->io_bp;
-
+	dprintf("zio_ddt_read_done start. zio: %px", zio);
 	if (zio_wait_for_children(zio, ZIO_CHILD_DDT_BIT, ZIO_WAIT_DONE)) {
+		dprintf("TRUE: zio_wait_for_children(zio, ZIO_CHILD_DDT_BIT, ZIO_WAIT_DONE)");
+		dprintf("zio_ddt_read_done end. zio: %px", zio);
 		return (NULL);
 	}
 
@@ -2977,18 +3137,24 @@ zio_ddt_read_done(zio_t *zio)
 	ASSERT(zio->io_child_type == ZIO_CHILD_LOGICAL);
 
 	if (zio->io_child_error[ZIO_CHILD_DDT]) {
+		dprintf("TRUE: zio->io_child_error[ZIO_CHILD_DDT])");
 		ddt_t *ddt = ddt_select(zio->io_spa, bp);
 		ddt_entry_t *dde = zio->io_vsd;
 		if (ddt == NULL) {
+			dprintf("TRUE: ddt == NULL)");
 			ASSERT(spa_load_state(zio->io_spa) != SPA_LOAD_NONE);
+			dprintf("zio_ddt_read_done end. zio: %px", zio);
 			return (zio);
 		}
 		if (dde == NULL) {
+			dprintf("TRUE: dde == NULL)");
 			zio->io_stage = ZIO_STAGE_DDT_READ_START >> 1;
 			zio_taskq_dispatch(zio, ZIO_TASKQ_ISSUE, B_FALSE);
+			dprintf("zio_ddt_read_done end. zio: %px", zio);
 			return (NULL);
 		}
 		if (dde->dde_repair_abd != NULL) {
+			dprintf("TRUE: dde->dde_repair_abd != NULL)");			
 			abd_copy(zio->io_abd, dde->dde_repair_abd,
 			    zio->io_size);
 			zio->io_child_error[ZIO_CHILD_DDT] = 0;
@@ -2998,7 +3164,7 @@ zio_ddt_read_done(zio_t *zio)
 	}
 
 	ASSERT(zio->io_vsd == NULL);
-
+	dprintf("zio_ddt_read_done end. zio: %px", zio);
 	return (zio);
 }
 
@@ -3108,74 +3274,101 @@ zio_ddt_child_write_ready(zio_t *zio)
 	ddt_phys_t *ddp = &dde->dde_phys[p];
 	zio_t *pio;
 
+	dprintf("zio_ddt_child_write_ready start. zio: %px", zio);
+
 	if (zio->io_error)
 		return;
 
 	ddt_enter(ddt);
+	dprintf("ddt entered. ddt: %px, zio: %px", ddt, zio);
 
 	ASSERT(dde->dde_lead_zio[p] == zio);
 
+	char blkbuf[BP_SPRINTF_LEN];
+	snprintf_blkptr(blkbuf, sizeof(blkbuf), zio->io_bp);
+	dprintf("before ddt_phys_fill. zio: %px, bp: %s", zio, blkbuf);
 	ddt_phys_fill(ddp, zio->io_bp);
 
 	zio_link_t *zl = NULL;
 	while ((pio = zio_walk_parents(zio, &zl)) != NULL)
 		ddt_bp_fill(ddp, pio->io_bp, zio->io_txg);
-
+	
+	dprintf("ddt exited. ddt: %px, zio: %px", ddt, zio);
 	ddt_exit(ddt);
+	dprintf("zio_ddt_child_write_ready end. zio: %px", zio);
 }
 
 static void
 zio_ddt_child_write_done(zio_t *zio)
 {
+	dprintf("zio_ddt_child_write_done start. zio: %px", zio);
 	int p = zio->io_prop.zp_copies;
 	ddt_t *ddt = ddt_select(zio->io_spa, zio->io_bp);
 	ddt_entry_t *dde = zio->io_private;
 	ddt_phys_t *ddp = &dde->dde_phys[p];
 
 	ddt_enter(ddt);
+	dprintf("ddt entered. ddt: %px, zio: %px", ddt, zio);
 
 	ASSERT(ddp->ddp_refcnt == 0);
 	ASSERT(dde->dde_lead_zio[p] == zio);
 	dde->dde_lead_zio[p] = NULL;
-
+	
+	char blkbuf[BP_SPRINTF_LEN];
+	snprintf_blkptr(blkbuf, sizeof(blkbuf), zio->io_bp);
+	dprintf("before while: zio_walk_parents. zio: %px, bp: %s", zio, blkbuf);
 	if (zio->io_error == 0) {
 		zio_link_t *zl = NULL;
-		while (zio_walk_parents(zio, &zl) != NULL)
+		while (zio_walk_parents(zio, &zl) != NULL){
+			dprintf("before refcnt +1. refcnt: %llu, zio: %px", ddp->ddp_refcnt, zio);
 			ddt_phys_addref(ddp);
+			dprintf("after refcnt +1. refcnt: %llu, zio: %px", ddp->ddp_refcnt, zio);	
+		}
 	} else {
 		ddt_phys_clear(ddp);
 	}
 
+	dprintf("ddt exited. ddt: %px, zio: %px", ddt, zio);
 	ddt_exit(ddt);
+	dprintf("zio_ddt_child_write_done end. zio: %px", zio);
 }
 
-static void
-zio_ddt_ditto_write_done(zio_t *zio)
+
+static boolean_t
+zio_handle_collision(zio_t *zio, ddt_t *ddt, ddt_entry_t *dde)
 {
-	int p = DDT_PHYS_DITTO;
-	ASSERTV(zio_prop_t *zp = &zio->io_prop);
+	dprintf("start zio_handle_collision, zio: %px", zio);
+	ASSERT(MUTEX_HELD(&ddt->ddt_lock));
+	zio_prop_t *zp = &zio->io_prop;
 	blkptr_t *bp = zio->io_bp;
-	ddt_t *ddt = ddt_select(zio->io_spa, bp);
-	ddt_entry_t *dde = zio->io_private;
-	ddt_phys_t *ddp = &dde->dde_phys[p];
-	ddt_key_t *ddk = &dde->dde_key;
-
-	ddt_enter(ddt);
-
-	ASSERT(ddp->ddp_refcnt == 0);
-	ASSERT(dde->dde_lead_zio[p] == zio);
-	dde->dde_lead_zio[p] = NULL;
-
-	if (zio->io_error == 0) {
-		ASSERT(ZIO_CHECKSUM_EQUAL(bp->blk_cksum, ddk->ddk_cksum));
-		ASSERT(zp->zp_copies < SPA_DVAS_PER_BP);
-		ASSERT(zp->zp_copies == BP_GET_NDVAS(bp) - BP_IS_GANG(bp));
-		if (ddp->ddp_phys_birth != 0)
-			ddt_phys_free(ddt, ddk, ddp, zio->io_txg);
-		ddt_phys_fill(ddp, bp);
+	//checksum collision? That could rarely happen.
+	if (zp->zp_dedup_verify && zio_ddt_collision(zio, ddt, dde)) {
+		/*
+		 * If we're using a weak checksum, upgrade to a strong checksum
+		 * and try again.  If we're already using a strong checksum,
+		 * we can't resolve it, so just convert to an ordinary write.
+		 * (And automatically e-mail a paper to Nature?)
+		 */
+		dprintf("zio_ddt_collision detected.");
+		if (!(zio_checksum_table[zp->zp_checksum].ci_flags &
+		    ZCHECKSUM_FLAG_DEDUP)) {
+			zp->zp_checksum = spa_dedup_checksum(zio->io_spa);
+			zio_pop_transforms(zio);
+			zio->io_stage = ZIO_STAGE_OPEN;
+			BP_ZERO(bp);
+		} else {
+			zp->zp_dedup = B_FALSE;
+			BP_SET_DEDUP(bp, B_FALSE);
+		}
+		ASSERT(!BP_GET_DEDUP(bp));
+		zio->io_pipeline = ZIO_WRITE_PIPELINE;
+		// ddt_exit(ddt);
+		// return (zio);
+		return B_TRUE;
+	}else{
+		dprintf("no zio_ddt_collision.");
+		return B_FALSE;
 	}
-
-	ddt_exit(ddt);
 }
 
 static zio_t *
@@ -3186,111 +3379,274 @@ zio_ddt_write(zio_t *zio)
 	uint64_t txg = zio->io_txg;
 	zio_prop_t *zp = &zio->io_prop;
 	int p = zp->zp_copies;
-	int ditto_copies;
 	zio_t *cio = NULL;
-	zio_t *dio = NULL;
 	ddt_t *ddt = ddt_select(spa, bp);
 	ddt_entry_t *dde;
 	ddt_phys_t *ddp;
+
+	// burst dedup varibles
+	htddt_t *hddt = htddt_select(spa, bp, HTDDT_TYPE_HEAD);
+	htddt_t *tddt = htddt_select(spa, bp ,HTDDT_TYPE_TAIL);
+	bstt_t *bstt = bstt_select(spa, bp);
+	htddt_entry_t *hdde = NULL;
+	htddt_entry_t *tdde = NULL;
+	htddt_key_t htddk_search;
+	// // for debug usage
+	uint64_t htsize_debug = htddt_htsize(zio->io_orig_size);
+	zio_t *based_io = NULL;
+	// void *based_data = NULL;
+	// void *new_data = NULL;
+	bstt_key_t bstk_search;
+	bstt_entry_t *bste;
+	boolean_t found_dde = B_FALSE;
+	boolean_t found_hdde = B_FALSE;
+	boolean_t found_tdde = B_FALSE;
+	boolean_t found_bste = B_FALSE;
 
 	ASSERT(BP_GET_DEDUP(bp));
 	ASSERT(BP_GET_CHECKSUM(bp) == zp->zp_checksum);
 	ASSERT(BP_IS_HOLE(bp) || zio->io_bp_override);
 	ASSERT(!(zio->io_bp_override && (zio->io_flags & ZIO_FLAG_RAW)));
+	dprintf("start ddt write. zio: %px, p: %llu", zio, p);
+
+	dprintf("first lookup ddt(through checksum+prop), cksm: %llx-%llx-%llx-%llx, prop: %llu, zio: %px",
+		bp->blk_cksum.zc_word[0],
+		bp->blk_cksum.zc_word[1],
+		bp->blk_cksum.zc_word[2],
+		bp->blk_cksum.zc_word[3],
+		bp->blk_prop,
+		zio);
 
 	ddt_enter(ddt);
-	dde = ddt_lookup(ddt, bp, B_TRUE);
+	dprintf("ddt entered. ddt: %px, zio: %px", ddt, zio);	
+	dde = ddt_lookup(ddt, bp, B_TRUE, &found_dde);
 	ddp = &dde->dde_phys[p];
 
-	if (zp->zp_dedup_verify && zio_ddt_collision(zio, ddt, dde)) {
-		/*
-		 * If we're using a weak checksum, upgrade to a strong checksum
-		 * and try again.  If we're already using a strong checksum,
-		 * we can't resolve it, so just convert to an ordinary write.
-		 * (And automatically e-mail a paper to Nature?)
-		 */
-		if (!(zio_checksum_table[zp->zp_checksum].ci_flags &
-		    ZCHECKSUM_FLAG_DEDUP)) {
-			zp->zp_checksum = spa_dedup_checksum(spa);
-			zio_pop_transforms(zio);
-			zio->io_stage = ZIO_STAGE_OPEN;
-			BP_ZERO(bp);
-		} else {
-			zp->zp_dedup = B_FALSE;
-			BP_SET_DEDUP(bp, B_FALSE);
-		}
-		ASSERT(!BP_GET_DEDUP(bp));
-		zio->io_pipeline = ZIO_WRITE_PIPELINE;
-		ddt_exit(ddt);
-		return (zio);
+	if(zio_handle_collision(zio, ddt, dde)){
+			goto out;
 	}
+	dprintf("zio_handle_collision passed. zio: %px", zio);
 
-	ditto_copies = ddt_ditto_copies_needed(ddt, dde, ddp);
-	ASSERT(ditto_copies < SPA_DVAS_PER_BP);
+	if(found_dde){
+		dprintf("ddt_lookup found a dde. zio: %px", zio);
+		
+		if (ddp->ddp_phys_birth != 0 || dde->dde_lead_zio[p] != NULL) {
+			dprintf("TRUE: ddp->ddp_phys_birth != 0 || dde->dde_lead_zio[p] != NULL, zio: %px", zio);
+			if (ddp->ddp_phys_birth != 0){
+				dprintf("TRUE: ddp->ddp_phys_birth != 0, zio: %px", zio);
+				ddt_bp_fill(ddp, bp, txg);
 
-	if (ditto_copies > ddt_ditto_copies_present(dde) &&
-	    dde->dde_lead_zio[DDT_PHYS_DITTO] == NULL) {
-		zio_prop_t czp = *zp;
-
-		czp.zp_copies = ditto_copies;
-
-		/*
-		 * If we arrived here with an override bp, we won't have run
-		 * the transform stack, so we won't have the data we need to
-		 * generate a child i/o.  So, toss the override bp and restart.
-		 * This is safe, because using the override bp is just an
-		 * optimization; and it's rare, so the cost doesn't matter.
-		 */
-		if (zio->io_bp_override) {
-			zio_pop_transforms(zio);
-			zio->io_stage = ZIO_STAGE_OPEN;
-			zio->io_pipeline = ZIO_WRITE_PIPELINE;
-			zio->io_bp_override = NULL;
-			BP_ZERO(bp);
-			ddt_exit(ddt);
-			return (zio);
-		}
-
-		dio = zio_write(zio, spa, txg, bp, zio->io_orig_abd,
-		    zio->io_orig_size, zio->io_orig_size, &czp, NULL, NULL,
-		    NULL, zio_ddt_ditto_write_done, dde, zio->io_priority,
-		    ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark);
-
-		zio_push_transform(dio, zio->io_abd, zio->io_size, 0, NULL);
-		dde->dde_lead_zio[DDT_PHYS_DITTO] = dio;
-	}
-
-	if (ddp->ddp_phys_birth != 0 || dde->dde_lead_zio[p] != NULL) {
-		if (ddp->ddp_phys_birth != 0)
-			ddt_bp_fill(ddp, bp, txg);
-		if (dde->dde_lead_zio[p] != NULL)
-			zio_add_child(zio, dde->dde_lead_zio[p]);
-		else
+			}
+			if (dde->dde_lead_zio[p] != NULL){
+				dprintf("TRUE: dde->dde_lead_zio[p] != NULL, zio: %px", zio);
+				zio_add_child(zio, dde->dde_lead_zio[p]);
+			}
+			else{
+				dprintf("before refcnt +1. refcnt: %llu, zio: %px", ddp->ddp_refcnt, zio);
+				ddt_phys_addref(ddp);
+				dprintf("after refcnt +1. refcnt: %llu, zio: %px", ddp->ddp_refcnt, zio);
+			}
+		} else if (zio->io_bp_override) {
+			dprintf("TRUE: zio->io_bp_override, zio: %px", zio);
+			ASSERT(bp->blk_birth == txg);
+			ASSERT(BP_EQUAL(bp, zio->io_bp_override));
+			ddt_phys_fill(ddp, bp);
 			ddt_phys_addref(ddp);
-	} else if (zio->io_bp_override) {
-		ASSERT(bp->blk_birth == txg);
-		ASSERT(BP_EQUAL(bp, zio->io_bp_override));
-		ddt_phys_fill(ddp, bp);
-		ddt_phys_addref(ddp);
-	} else {
-		cio = zio_write(zio, spa, txg, bp, zio->io_orig_abd,
-		    zio->io_orig_size, zio->io_orig_size, zp,
-		    zio_ddt_child_write_ready, NULL, NULL,
-		    zio_ddt_child_write_done, dde, zio->io_priority,
-		    ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark);
-
-		zio_push_transform(cio, zio->io_abd, zio->io_size, 0, NULL);
-		dde->dde_lead_zio[p] = cio;
+		}
+		else{
+			dprintf("ALERT: could this happen? , zio: %px", zio);
+		}
+		goto out;		
 	}
+	else{
+		// could this happen???
+		if (ddp->ddp_phys_birth != 0 || dde->dde_lead_zio[p] != NULL) {
+			dprintf("TRUE: ddp->ddp_phys_birth != 0 || dde->dde_lead_zio[p] != NULL , zio: %px", zio);
+			dprintf("ALERT: could this happen? , zio: %px", zio);
+			if (dde->dde_lead_zio[p] != NULL){
+				dprintf("TRUE: dde->dde_lead_zio[p] != NULL , zio: %px", zio);
+				dprintf("ALERT: could this happen? , zio: %px", zio);			
+			}
+			else{
+				dprintf("ALERT: could this happen? , zio: %px", zio);			
+			}
+		}
+		else if (zio->io_bp_override) {
+			dprintf("TRUE: zio->io_bp_override , zio: %px", zio);
+			dprintf("ALERT: could this happen? , zio: %px", zio);			
+		}	
+	}
+// --------------------------------------------------------------------------------------------
+	dprintf("ddt_lookup did not find a dde, zio: %px", zio);
+	dprintf("set bste for search, zio: %px", zio );
+	bstk_search.bstk_cksum = bp->blk_cksum;
+	bste = bstt_lookup(bstt, &bstk_search, B_FALSE, &found_bste);
+	if(found_bste && bste != NULL && bste->bstt_phys.valid){
+		if(ddt_exist(ddt, bste->bstt_phys.bstp_dde)){
+			dprintf("one valid based dde found. zio: %px", zio);
+			dprintf("We found bste so we delete dde allocated before, zio: %px", zio);
+			ddt_remove(ddt, dde);
+			bstt_phys_addref(zio, &(bste->bstt_phys));
+			dprintf("bstt_bp_fill: based_ddp used to fill bp, zio: %px", zio);
+			bstt_bp_fill(&(bste->bstt_phys), bp, txg);
+			dprintf("zio_ddt_write end. zio: %px", zio);
+			goto out;
+		}
+		dprintf("bste: %px 's based dde did not exist in ddt: %px , zio: %px", bste, ddt, zio);
+		bste->bstt_phys.valid = B_FALSE;
+	}
+// --------------------------------------------------------------------------------------------
 
+	dprintf("bstt_lookup did not find a bste, zio: %px", zio);
+	dprintf("set head dde for search, zio: %px", zio);
+	ZIO_SET_CHECKSUM(&(htddk_search.htddk_cksum), 0, 0, 0, 0);
+	htddk_search.htddk_type = HTDDT_TYPE_HEAD;
+	// compute head\tail's checksum and set htdde
+	htddt_checksum_compute(spa, zp->zp_checksum, zio->io_orig_abd, zio->io_orig_size, htsize_debug, 0, &(htddk_search.htddk_cksum));
+	hdde = htddt_lookup(hddt, &htddk_search, B_FALSE, &found_hdde);
+	// found hdde and refcnt < MAX_HTDDP_REFCNT
+	if(found_hdde && hdde != NULL){
+		dprintf("htddt_lookup found a hdde, zio: %px", zio);
+		if(hdde != NULL && hdde->htdde_phys.valid){
+			dprintf("htddt_lookup found a valid hdde, zio: %px", zio);
+			if(hdde->htdde_phys.htddp_refcnt < (uint64_t)MAX_HTDDP_REFCNT){
+				dprintf("htddt_lookup found a valid hdde and refcnt < MAX_HTDDP_REFCNT(%llu), zio: %px", (uint64_t)MAX_HTDDP_REFCNT, zio);
+				if(ddt_exist(ddt, hdde->htdde_phys.htddp_dde)){
+					dprintf("htddt_lookup found a valid hdde and refcnt == 0 and based dde exists, zio: %px", zio);
+					goto burst;
+				}
+				else{
+					dprintf("htddt_lookup found a valid hdde and refcnt == 0 but based dde does not exist, zio: %px", zio);
+					hdde->htdde_phys.valid = B_FALSE;
+				}			
+			}
+		}
+	}
+	
+	dprintf("set tail dde for search, zio: %px", zio);
+	ZIO_SET_CHECKSUM(&(htddk_search.htddk_cksum), 0, 0, 0, 0);
+	htddk_search.htddk_type = HTDDT_TYPE_TAIL;
+	// compute head\tail's checksum and set htdde
+	htddt_checksum_compute(spa, zp->zp_checksum, zio->io_orig_abd, zio->io_orig_size, htsize_debug, zio->io_orig_size - htsize_debug, &(htddk_search.htddk_cksum));
+	tdde = htddt_lookup(tddt, &htddk_search, B_FALSE, &found_tdde);
+	// found tdde and refcnt < MAX_HTDDP_REFCNT
+	if(found_tdde && tdde != NULL){
+		dprintf("htddt_lookup found a tdde, zio: %px", zio);
+		if(tdde != NULL && tdde->htdde_phys.valid){
+			dprintf("htddt_lookup found a valid tdde, zio: %px", zio);
+			if(tdde->htdde_phys.htddp_refcnt < (uint64_t)MAX_HTDDP_REFCNT){
+				dprintf("htddt_lookup found a valid tdde and refcnt < MAX_HTDDP_REFCNT(%llu), zio: %px", (uint64_t)MAX_HTDDP_REFCNT, zio);
+				if(ddt_exist(ddt, tdde->htdde_phys.htddp_dde)){
+					dprintf("htddt_lookup found a valid tdde and refcnt == 0 and based dde exists, zio: %px", zio);
+					goto burst;
+				}
+				else{
+					dprintf("htddt_lookup found a valid tdde and refcnt == 0 but based dde does not exist, zio: %px", zio);
+					tdde->htdde_phys.valid = B_FALSE;
+				}			
+			}
+		}
+	}
+	goto write;
+// ------------------------------------------------------------------------------------------
+	
+burst:
+	dprintf("We found htdde so we delete dde allocated before, zio: %px", zio);
+	ddt_remove(ddt, dde);
+
+
+
+	// create new bste
+	bstk_search.bstk_cksum = bp->blk_cksum;
+	bste = bstt_lookup(bstt, &bstk_search, B_TRUE, &found_bste);
+	if(found_bste && bste != NULL && !bste->bstt_phys.valid){
+		dprintf("found_bste && bste(%px) != NULL && !bste->bstt_phys.valid, we have to create a new bete, zio: %px", bste, zio);
+	}
+	dprintf("bstt_bstp_fill, zio: %px", zio);
+	bstt_bstp_fill(&(bste->bstt_phys), found_hdde ? hdde : tdde);
+
+	dprintf("ddt exited. ddt: %px, zio: %px", ddt, zio);
 	ddt_exit(ddt);
 
-	if (cio)
-		zio_nowait(cio);
-	if (dio)
-		zio_nowait(dio);
+	dprintf("before read based_data, zio: %px", zio);
+	based_io = zio_ddt_read_based_data(zio, ddt->ddt_checksum, &(bste->bstt_phys), zio_ddt_create_burst);
+	if(based_io == NULL){
+		dprintf("based_data not ready, restart current zio: %px", zio);
+		zio_pop_transforms(zio);
+		zio->io_stage = ZIO_STAGE_OPEN;	
+		zio->io_pipeline = ZIO_WRITE_PIPELINE;
+		BP_ZERO(bp);
+		return (zio);
+	}
+	dprintf("based_data was ready, current zio: %px, based io: %px", zio, based_io);
+	ddt_enter(ddt);
+	bste->bstt_phys.valid = B_TRUE;
+	dprintf("add based_dde's refcnt and htdde's refcnt, zio: %px", zio);
+	htddt_phys_addref(zio, &((found_hdde ? hdde : tdde)->htdde_phys));
+	dprintf("bstt_bp_fill: use based_ddp to fill bp, zio: %px", zio);
+	bstt_bp_fill(&(bste->bstt_phys), bp, txg);
+	ddt_exit(ddt);
+	// wait for based data (may optimize: without lock)
+	zio_nowait(based_io);
+	dprintf("end ddt write. zio: %px", zio);
+	return (zio);	
+	
+// -------------------------------------------------------------------------------------------
 
+write:
+	dprintf("We did not find dde or htdde, zio: %px", zio);
+	dprintf("set head dde for insert, zio: %px", zio);
+	ZIO_SET_CHECKSUM(&(htddk_search.htddk_cksum), 0, 0, 0, 0);
+	htddk_search.htddk_type = HTDDT_TYPE_HEAD;
+	// compute head\tail's checksum and set htdde
+	htddt_checksum_compute(spa, zp->zp_checksum, zio->io_orig_abd, zio->io_orig_size, htsize_debug, 0, &(htddk_search.htddk_cksum));
+	hdde = htddt_lookup(hddt, &htddk_search, B_TRUE, &found_hdde);
+	if(found_hdde){
+		dprintf("found hdde when inserting, so replace old hdde by new allocated hdde. zio: %px", zio);
+	}
+	hdde->htdde_phys.htddp_dde = dde;
+	hdde->htdde_phys.htddp_dde_p = p;
+	hdde->htdde_phys.htddp_refcnt = 0;
+	hdde->htdde_phys.htddp_abd_size = zio->io_orig_size;
+	hdde->htdde_phys.valid = B_TRUE;
+
+	dprintf("set tail dde for insert, zio: %px", zio);
+	ZIO_SET_CHECKSUM(&(htddk_search.htddk_cksum), 0, 0, 0, 0);
+	htddk_search.htddk_type = HTDDT_TYPE_TAIL;
+	// compute head\tail's checksum and set htdde
+	htddt_checksum_compute(spa, zp->zp_checksum, zio->io_orig_abd, zio->io_orig_size, htsize_debug, zio->io_orig_size - htsize_debug, &(htddk_search.htddk_cksum));
+	tdde = htddt_lookup(tddt, &htddk_search, B_TRUE, &found_tdde);
+	if(found_tdde){
+		dprintf("found tdde when inserting, so replace old tdde by new allocated tdde. zio: %px", zio);
+	}
+	tdde->htdde_phys.htddp_dde = dde;
+	tdde->htdde_phys.htddp_dde_p = p;
+	tdde->htdde_phys.htddp_refcnt = 0;
+	tdde->htdde_phys.htddp_abd_size = zio->io_orig_size;
+	tdde->htdde_phys.valid = B_TRUE;
+
+	dprintf("write data, zio: %px", zio);
+	cio = zio_write(zio, spa, txg, bp, zio->io_orig_abd,
+		zio->io_orig_size, zio->io_orig_size, zp,
+		zio_ddt_child_write_ready, NULL, NULL,
+		zio_ddt_child_write_done, dde, zio->io_priority,
+		ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark);
+	zio_push_transform(cio, zio->io_abd, zio->io_size, 0, NULL);
+	dde->dde_lead_zio[p] = cio;
+	dprintf("set dde->dde_lead_zio[p], dde: %px, dde_lead_zio: %px, zio: %px,", dde, cio, zio);
+
+	goto out;
+
+// -------------------------------------------------------------------------------------------
+
+
+out:
+	dprintf("ddt exited. ddt: %px, zio: %px", ddt, zio);
+	ddt_exit(ddt);
+	zio_nowait(cio);
+	dprintf("end ddt write. zio: %px", zio);
 	return (zio);
+	
 }
 
 ddt_entry_t *freedde; /* for debugging */
@@ -3304,19 +3660,66 @@ zio_ddt_free(zio_t *zio)
 	ddt_entry_t *dde;
 	ddt_phys_t *ddp;
 
+	//burst dedup variables
+	boolean_t found_dde = B_FALSE;
+	boolean_t found_bste = B_FALSE;
+	bstt_t *bstt = bstt_select(spa, bp);
+	bstt_key_t bstk_search;
+	bstt_entry_t *bste;
+	ddt_entry_t *based_dde;
+	ddt_phys_t *based_ddp;
+
 	ASSERT(BP_GET_DEDUP(bp));
 	ASSERT(zio->io_child_type == ZIO_CHILD_LOGICAL);
 
 	ddt_enter(ddt);
-	freedde = dde = ddt_lookup(ddt, bp, B_TRUE);
-	if (dde) {
+	dprintf("ddt entered. ddt: %px, zio: %px", ddt, zio);
+	dprintf("first ddt_lookup");
+	freedde = dde = ddt_lookup(ddt, bp, B_FALSE, &found_dde);
+	if (found_dde) {
+		dprintf("found_dde, find ddp according to bp's dva and birth");
+		// find ddp according to bp's dva and birth
 		ddp = ddt_phys_select(dde, bp);
-		if (ddp)
+		if (ddp){
+			dprintf("before ddp refcnt -1. refcnt: %llu, zio: %px", ddp->ddp_refcnt, zio);
 			ddt_phys_decref(ddp);
+			dprintf("after ddp refcnt -1. refcnt: %llu, zio: %px", ddp->ddp_refcnt, zio);
+		}
+		ddt_exit(ddt);
+		dprintf("ddt exited. ddt: %px, zio: %px", ddt, zio);
+		return (zio);
 	}
-	ddt_exit(ddt);
 
+	// find bste in bstt
+	// bstt_enter(bstt);
+	dde = NULL;
+	bstk_search.bstk_cksum = bp->blk_cksum;
+	dprintf("ddt_lookup found no dde, so bstt_lookup");
+	bste = bstt_lookup(bstt, &bstk_search, B_FALSE, &found_bste);
+	if(found_bste && bste != NULL && bste->bstt_phys.valid){
+		based_dde = bste->bstt_phys.bstp_dde;
+		if(ddt_exist(ddt, bste->bstt_phys.bstp_dde)){
+			based_ddp = &(based_dde->dde_phys[bste->bstt_phys.bstp_dde_p]);
+			if (based_ddp){
+				dprintf("before based_ddp refcnt -1. refcnt: %llu, zio: %px", based_ddp->ddp_refcnt, zio);
+				ddt_phys_decref(based_ddp);
+				dprintf("after based_ddp refcnt -1. refcnt: %llu, zio: %px", 	based_ddp->ddp_refcnt, zio);
+				bste->bstt_phys.bstp_refcnt--;
+			}
+		}
+		else{
+			dprintf("based_dde does ont exist, bste->bstt_phys.valid = B_FALSE, zio: %px", zio);
+			bste->bstt_phys.valid = B_FALSE;
+		}
+	}
+	else{
+		dprintf("This could not happen!");
+	}
+
+	ddt_exit(ddt);
+	dprintf("ddt exited. ddt: %px, zio: %px", ddt, zio);
 	return (zio);
+
 }
 
 /*

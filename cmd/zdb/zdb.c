@@ -3425,7 +3425,7 @@ zdb_count_block(zdb_cb_t *zcb, zilog_t *zilog, const blkptr_t *bp,
 
 		ddt = ddt_select(zcb->zcb_spa, bp);
 		ddt_enter(ddt);
-		dde = ddt_lookup(ddt, bp, B_FALSE);
+		dde = ddt_lookup(ddt, bp, B_FALSE, NULL);
 
 		if (dde == NULL) {
 			refcnt = 0;
@@ -3759,7 +3759,7 @@ zdb_ddt_leak_init(spa_t *spa, zdb_cb_t *zcb)
 		}
 		ddt_t *ddt = spa->spa_ddt[ddb.ddb_checksum];
 		ddt_enter(ddt);
-		VERIFY(ddt_lookup(ddt, &blk, B_TRUE) != NULL);
+		VERIFY(ddt_lookup(ddt, &blk, B_TRUE, NULL) != NULL);
 		ddt_exit(ddt);
 	}
 

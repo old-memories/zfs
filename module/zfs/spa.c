@@ -52,6 +52,7 @@
 #include <sys/zap.h>
 #include <sys/zil.h>
 #include <sys/ddt.h>
+#include <sys/burst_dedup.h>
 #include <sys/vdev_impl.h>
 #include <sys/vdev_removal.h>
 #include <sys/vdev_indirect_mapping.h>
@@ -5315,6 +5316,11 @@ spa_create(const char *pool, nvlist_t *nvroot, nvlist_t *props,
 	 * Create DDTs (dedup tables).
 	 */
 	ddt_create(spa);
+	/*
+	 * Create burst dedup tables
+	 */
+	htddt_create(spa);
+	bstt_create(spa);
 
 	spa_update_dspace(spa);
 
@@ -5870,6 +5876,18 @@ export_spa:
 int
 spa_destroy(char *pool)
 {
+	/*
+		Now just delete all burst_dedup info.
+	*/
+	spa_t *spa;
+	mutex_enter(&spa_namespace_lock);
+	if ((spa = spa_lookup(pool)) == NULL) {
+		mutex_exit(&spa_namespace_lock);
+		return (SET_ERROR(ENOENT));
+	}
+	htddt_unload(spa);
+	bstt_unload(spa);
+	mutex_exit(&spa_namespace_lock);
 	return (spa_export_common(pool, POOL_STATE_DESTROYED, NULL,
 	    B_FALSE, B_FALSE));
 }
