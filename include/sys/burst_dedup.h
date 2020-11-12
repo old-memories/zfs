@@ -144,7 +144,26 @@ typedef struct bstt_phys {
     uint64_t bstp_abd_size;
     ddt_entry_t *bstp_dde;
     burst_t bstp_burst;
+    dva_t		bstp_burst_dva[SPA_DVAS_PER_BP];
+    uint64_t	bstp_phys_birth;
+    uint64_t	bstp_prop;
 } bstt_phys_t;
+
+#define	BSTP_GET_LSIZE(bstp)	\
+	BF64_GET_SB((bstp)->bstp_prop, 0, 16, SPA_MINBLOCKSHIFT, 1)
+#define	BSTP_SET_LSIZE(bstp, x)	\
+	BF64_SET_SB((bstp)->bstp_prop, 0, 16, SPA_MINBLOCKSHIFT, 1, x)
+
+#define	BSTP_GET_PSIZE(bstp)	\
+	BF64_GET_SB((bstp)->bstp_prop, 16, 16, SPA_MINBLOCKSHIFT, 1)
+#define	BSTP_SET_PSIZE(bstp, x)	\
+	BF64_SET_SB((bstp)->bstp_prop, 16, 16, SPA_MINBLOCKSHIFT, 1, x)
+
+#define	BSTP_GET_COMPRESS(bstp)		BF64_GET((bstp)->bstp_prop, 32, 7)
+#define	BSTP_SET_COMPRESS(bstp, x)	BF64_SET((bstp)->bstp_prop, 32, 7, x)
+
+#define	BSTP_GET_CRYPT(bstp)		BF64_GET((bstp)->bstp_prop, 39, 1)
+#define	BSTP_SET_CRYPT(bstp, x)	BF64_SET((bstp)->bstp_prop, 39, 1, x)
 
 
 /*
@@ -152,7 +171,8 @@ typedef struct bstt_phys {
 */
 typedef struct bstt_entry {
     bstt_key_t bste_key;
-    bstt_phys_t bstt_phys;
+    bstt_phys_t bste_phys;
+    zio_t		*bste_lead_burst_io;
     avl_node_t bste_node;
 } bstt_entry_t;
 
@@ -188,7 +208,8 @@ extern htddt_entry_t *htddt_lookup(htddt_t *htddt, htddt_key_t *htddk, boolean_t
 extern void htddt_remove(htddt_t *htddt, htddt_entry_t *htdde);
 extern void htddt_create(spa_t *spa);
 extern void htddt_unload(spa_t *spa);
-extern void htddt_sync_table(htddt_t *htddt);
+extern void htddt_sync_table(htddt_t *htddt, ddt_t *ddt);
+extern void htddt_bstp_fill(htddt_entry_t *htdde, bstt_phys_t *bstp);
 extern void htddt_phys_addref(zio_t *zio, htddt_phys_t *htddp);
 extern int htddt_entry_compare(const void *x1, const void *x2);
 extern uint64_t htddt_htsize(uint64_t size);
@@ -202,9 +223,9 @@ extern bstt_entry_t *bstt_lookup(bstt_t *bstt, bstt_key_t *bstk, boolean_t add, 
 extern void bstt_remove(bstt_t *bstt, bstt_entry_t *bste);
 extern void bstt_create(spa_t *spa);
 extern void bstt_unload(spa_t *spa);
-extern void bstt_sync_table(bstt_t *bstt);
+extern void bstt_sync_table(bstt_t *bstt, ddt_t *ddt, uint64_t txg);
 extern int bstt_entry_compare(const void *x1, const void *x2);
-extern void bstt_bstp_fill(bstt_phys_t *bstp, htddt_entry_t *htdde);
+extern void bstt_bstp_fill(bstt_phys_t *bstp, blkptr_t *bp);
 extern void bstt_bp_fill(bstt_phys_t *bstp, blkptr_t *bp, uint64_t txg);
 extern void bstt_phys_addref(zio_t *zio, bstt_phys_t *bstp);
 /*

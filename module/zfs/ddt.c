@@ -442,7 +442,7 @@ ddt_stat_update(ddt_t *ddt, ddt_entry_t *dde, uint64_t neg)
 	ASSERT(bucket >= 0);
 
 	ddh = &ddt->ddt_histogram[dde->dde_type][dde->dde_class];
-
+	// zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt: %px, bucket: %d, dde: %px, dde_type: %d, dde_class: %d, dds_ref_blocks: %llu, dds_dsize: %llu, dds_ref_dsize: %llu",ddt, bucket, dde, dde->dde_type, dde->dde_class, dds.dds_ref_blocks, dds.dds_dsize, dds.dds_ref_dsize);
 	ddt_stat_add(&ddh->ddh_stat[bucket], &dds, neg);
 }
 
@@ -458,8 +458,13 @@ ddt_histogram_stat(ddt_stat_t *dds, const ddt_histogram_t *ddh)
 {
 	bzero(dds, sizeof (*dds));
 
-	for (int h = 0; h < 64; h++)
+	for (int h = 0; h < 64; h++){
 		ddt_stat_add(dds, &ddh->ddh_stat[h], 0);
+		// zfs_burst_dedup_dbgmsg("=====burst-dedup=====dds_ref_blocks: %llu, dds_dsize: %llu, dds_ref_dsize: %llu", ddh->ddh_stat[h].dds_ref_blocks, ddh->ddh_stat[h].dds_dsize, ddh->ddh_stat[h].dds_ref_dsize);
+	}
+	
+
+
 }
 
 boolean_t
@@ -1030,6 +1035,17 @@ ddt_repair_done(ddt_t *ddt, ddt_entry_t *dde)
 	ddt_exit(ddt);
 }
 
+
+void
+ddt_histogram_set_empty(ddt_histogram_t *ddh)
+{
+	uint64_t *s = (uint64_t *)ddh;
+	uint64_t *s_end = (uint64_t *)(ddh + 1);
+
+	while (s < s_end)
+		*s++ = 0;
+}
+
 static void
 ddt_sync_table(ddt_t *ddt, dmu_tx_t *tx, uint64_t txg)
 {
@@ -1047,7 +1063,12 @@ ddt_sync_table(ddt_t *ddt, dmu_tx_t *tx, uint64_t txg)
 	ASSERT(spa->spa_uberblock.ub_version >= SPA_VERSION_DEDUP);
 
 
-	bzero(&ddt->ddt_histogram, sizeof(ddt_histogram_t));
+	for (enum ddt_type type = 0; type < DDT_TYPES; type++) {
+		for (enum ddt_class class = 0; class < DDT_CLASSES; class++) {
+			ddt_histogram_set_empty(&ddt->ddt_histogram[type][class]);
+		}
+	}
+	// zfs_burst_dedup_dbgmsg("ddt->ddt_histogram has been clear, ddt: %px", ddt);
 	for (dde = avl_first(&ddt->ddt_tree); dde != NULL; dde = dde_next) {
 		dde_next = AVL_NEXT(&ddt->ddt_tree, dde);
 		ddp = dde->dde_phys;
@@ -1121,10 +1142,10 @@ ddt_sync(spa_t *spa, uint64_t txg)
 		if (ddt == NULL)
 			continue;
 		ddt_enter(ddt);	
-		bstt_sync_table(bstt);
 		ddt_sync_table(ddt, tx, txg);
-		htddt_sync_table(hddt);
-		htddt_sync_table(tddt);
+		bstt_sync_table(bstt, ddt, txg);
+		htddt_sync_table(hddt, ddt);
+		htddt_sync_table(tddt, ddt);
 		ddt_exit(ddt);
 	}
 
