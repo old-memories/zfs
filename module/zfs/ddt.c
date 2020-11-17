@@ -948,6 +948,7 @@ ddt_load(spa_t *spa)
 void
 ddt_unload(spa_t *spa)
 {
+	zfs_burst_dedup_dbgmsg("=====burst-dedup=====unloading ddt tables...");
 	for (enum zio_checksum c = 0; c < ZIO_CHECKSUM_FUNCTIONS; c++) {
 		if (spa->spa_ddt[c]) {
 			ddt_remove_all(spa->spa_ddt[c]);

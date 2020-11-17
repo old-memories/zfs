@@ -1531,6 +1531,8 @@ spa_unload(spa_t *spa)
 	}
 
 	ddt_unload(spa);
+	htddt_unload(spa);
+	bstt_unload(spa);
 
 	/*
 	 * Drop and purge level 2 cache
@@ -5885,8 +5887,7 @@ spa_destroy(char *pool)
 		mutex_exit(&spa_namespace_lock);
 		return (SET_ERROR(ENOENT));
 	}
-	htddt_unload(spa);
-	bstt_unload(spa);
+
 	mutex_exit(&spa_namespace_lock);
 	return (spa_export_common(pool, POOL_STATE_DESTROYED, NULL,
 	    B_FALSE, B_FALSE));
