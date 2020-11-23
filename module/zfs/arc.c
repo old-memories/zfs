@@ -2213,7 +2213,12 @@ arc_buf_fill(arc_buf_t *buf, spa_t *spa, const zbookmark_phys_t *zb,
 	} else {
 		ASSERT(hdr_compressed);
 		ASSERT(!compressed);
-		ASSERT3U(HDR_GET_LSIZE(hdr), !=, HDR_GET_PSIZE(hdr));
+		/*
+	     * If ZIO_COMPRESS_BURST, we allow HDR_GET_PSIZE(hdr)(== burst_abd's size) == HDR_GET_LSIZE(hdr)(== the real data lsize)
+		*/
+		if(HDR_GET_COMPRESS(hdr) != ZIO_COMPRESS_BURST){
+			ASSERT3U(HDR_GET_LSIZE(hdr), !=, HDR_GET_PSIZE(hdr));
+		}
 
 		/*
 		 * If the buf is sharing its data with the hdr, unlink it and
@@ -2256,6 +2261,16 @@ arc_buf_fill(arc_buf_t *buf, spa_t *spa, const zbookmark_phys_t *zb,
 		if (arc_buf_try_copy_decompressed_data(buf)) {
 			/* Skip byteswapping and checksumming (already done) */
 			return (0);
+		} else if(HDR_GET_COMPRESS(hdr) == ZIO_COMPRESS_BURST){
+			ASSERT3U(hdr->b_burst_hdr.b_size, ==, HDR_GET_LSIZE(hdr));
+			zfs_burst_dedup_dbgmsg( "HDR_GET_COMPRESS(hdr) == ZIO_COMPRESS_BURST, copy b_babd(%px) of hdr(%px) to buf(%px), lsize %d",hdr->b_burst_hdr.b_babd,
+			hdr,
+			buf,
+			HDR_GET_LSIZE(hdr));
+			abd_copy_to_buf(buf->b_data, hdr->b_burst_hdr.b_babd, HDR_GET_LSIZE(hdr));
+			abd_free(hdr->b_burst_hdr.b_babd);
+			hdr->b_burst_hdr.b_babd = NULL;
+			hdr->b_burst_hdr.b_size = 0;
 		} else {
 			error = zio_decompress_data(HDR_GET_COMPRESS(hdr),
 			    hdr->b_l1hdr.b_pabd, buf->b_data,
@@ -5968,6 +5983,19 @@ arc_read_done(zio_t *zio)
 		}
 	}
 
+	if(BP_GET_COMPRESS(bp) == ZIO_COMPRESS_BURST){
+		zfs_burst_dedup_dbgmsg("BP_GET_COMPRESS(bp) == ZIO_COMPRESS_BURST, set hdr->b_burst_hdr = zio->io_orig_abd(%px), abd_size: %llu, hdr: %px, bp: %px, zio: %px",
+		zio->io_orig_abd,
+		zio->io_orig_size,
+		hdr,
+		bp,
+		zio);
+		hdr->b_burst_hdr.b_babd = zio->io_orig_abd;
+		hdr->b_burst_hdr.b_size = zio->io_orig_size;
+		zio->io_orig_abd = zio->io_abd;
+		zio->io_orig_size = zio->io_size;
+	}
+
 	if (zio->io_error == 0) {
 		/* byteswap if necessary */
 		if (BP_SHOULD_BYTESWAP(zio->io_bp)) {
@@ -6346,7 +6374,7 @@ top:
 		boolean_t devw = B_FALSE;
 		uint64_t size;
 		abd_t *hdr_abd;
-
+		
 		/*
 		 * Gracefully handle a damaged logical block size as a
 		 * checksum error.
@@ -7117,7 +7145,7 @@ arc_write_ready(zio_t *zio)
 			arc_hdr_alloc_abd(hdr, B_TRUE);
 			abd_copy(hdr->b_crypt_hdr.b_rabd, zio->io_abd, psize);
 		} else if (arc_hdr_get_compress(hdr) != ZIO_COMPRESS_OFF &&
-		    !ARC_BUF_COMPRESSED(buf)) {
+		  !ARC_BUF_COMPRESSED(buf)) {
 			ASSERT3U(psize, >, 0);
 			arc_hdr_alloc_abd(hdr, B_FALSE);
 			abd_copy(hdr->b_l1hdr.b_pabd, zio->io_abd, psize);

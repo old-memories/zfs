@@ -204,6 +204,13 @@ typedef struct arc_buf_hdr_crypt {
 	uint8_t			b_mac[ZIO_DATA_MAC_LEN];
 } arc_buf_hdr_crypt_t;
 
+typedef struct arc_buf_hdr_burst {
+	abd_t *b_babd;
+	uint64_t b_size;
+} arc_buf_hdr_burst_t;
+
+
+
 typedef struct l2arc_dev {
 	vdev_t			*l2ad_vdev;	/* vdev */
 	spa_t			*l2ad_spa;	/* spa */
@@ -277,6 +284,8 @@ struct arc_buf_hdr {
 	 * is set and the L1 header exists.
 	 */
 	arc_buf_hdr_crypt_t b_crypt_hdr;
+
+	arc_buf_hdr_burst_t b_burst_hdr; 
 };
 #ifdef __cplusplus
 }

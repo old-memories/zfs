@@ -36,7 +36,7 @@ extern "C" {
 #endif
 
 #define MIN_BLOCK_SIZE 1
-#define MAX_HTDDP_REFCNT 1
+#define MAX_HTDDP_REFCNT UINT64_MAX
 #define HTDDT_HT_RIGHTSHIFT 3
 
 typedef struct ddt_entry ddt_entry_t;

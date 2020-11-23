@@ -442,7 +442,6 @@ ddt_stat_update(ddt_t *ddt, ddt_entry_t *dde, uint64_t neg)
 	ASSERT(bucket >= 0);
 
 	ddh = &ddt->ddt_histogram[dde->dde_type][dde->dde_class];
-	// zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt: %px, bucket: %d, dde: %px, dde_type: %d, dde_class: %d, dds_ref_blocks: %llu, dds_dsize: %llu, dds_ref_dsize: %llu",ddt, bucket, dde, dde->dde_type, dde->dde_class, dds.dds_ref_blocks, dds.dds_dsize, dds.dds_ref_dsize);
 	ddt_stat_add(&ddh->ddh_stat[bucket], &dds, neg);
 }
 
@@ -460,7 +459,6 @@ ddt_histogram_stat(ddt_stat_t *dds, const ddt_histogram_t *ddh)
 
 	for (int h = 0; h < 64; h++){
 		ddt_stat_add(dds, &ddh->ddh_stat[h], 0);
-		// zfs_burst_dedup_dbgmsg("=====burst-dedup=====dds_ref_blocks: %llu, dds_dsize: %llu, dds_ref_dsize: %llu", ddh->ddh_stat[h].dds_ref_blocks, ddh->ddh_stat[h].dds_dsize, ddh->ddh_stat[h].dds_ref_dsize);
 	}
 	
 
@@ -787,34 +785,32 @@ ddt_lookup(ddt_t *ddt, const blkptr_t *bp, boolean_t add, boolean_t *found)
 	ddt_key_fill(&dde_search.dde_key, bp);
 	char blkbuf[BP_SPRINTF_LEN];
 	snprintf_blkptr(blkbuf, sizeof(blkbuf), bp);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====start looking up ddt... spa name: %s, bp: %s", spa_name(ddt->ddt_spa), blkbuf);
+	zfs_burst_dedup_dbgmsg("=====burst-dedup=====start looking up in ddt(%px)... spa name: %s, bp: %s", ddt, spa_name(ddt->ddt_spa), blkbuf);
 	dde = avl_find(&ddt->ddt_tree, &dde_search, &where);
 	if (dde == NULL) {
 		if(found != NULL){
 			*found = B_FALSE;
 		}
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_find returns NULL.");
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_find in ddt(%px) returns NULL.", ddt);
 		if (!add){
 			zfs_burst_dedup_dbgmsg("=====burst-dedup=====not add, just return.");
 			return (NULL);
 		}
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====add, so alloc a new dde and insert.");
 		dde = ddt_alloc(&dde_search.dde_key);
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_insert: alloc and insert into ddt->ddt_tree dde: %px", dde);
 		avl_insert(&ddt->ddt_tree, dde, where);
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====add, so alloc a new dde(%px) and insert in ddt(%px).", dde, ddt);
 	}
 	else{
 		if(found != NULL){
 			*found = B_TRUE;
 		}
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_find returns dde. dde: %px", dde);
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_find returns dde(%px).", dde);
 	}
 
 	
 	dde->dde_loaded = B_TRUE;
 	dde->dde_loading = B_FALSE;
 
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====End ddt_lookup. Return.");
 	return (dde);
 }
 
@@ -997,7 +993,6 @@ ddt_repair_start(ddt_t *ddt, const blkptr_t *bp)
 	ddt_key_fill(&ddk, bp);
 
 	dde = ddt_alloc(&ddk);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt_repair_start: dde allocated dde: %px", dde);
 
 	for (enum ddt_type type = 0; type < DDT_TYPES; type++) {
 		for (enum ddt_class class = 0; class < DDT_CLASSES; class++) {
@@ -1069,7 +1064,6 @@ ddt_sync_table(ddt_t *ddt, dmu_tx_t *tx, uint64_t txg)
 			ddt_histogram_set_empty(&ddt->ddt_histogram[type][class]);
 		}
 	}
-	// zfs_burst_dedup_dbgmsg("ddt->ddt_histogram has been clear, ddt: %px", ddt);
 	for (dde = avl_first(&ddt->ddt_tree); dde != NULL; dde = dde_next) {
 		dde_next = AVL_NEXT(&ddt->ddt_tree, dde);
 		ddp = dde->dde_phys;

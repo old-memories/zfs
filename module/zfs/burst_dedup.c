@@ -143,20 +143,20 @@ htddt_lookup(htddt_t *htddt, htddt_key_t *htddk, boolean_t add, boolean_t *found
 		if(found != NULL){
 			*found = B_FALSE;
 		}
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_find returns NULL.");
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_find in htddt(%px) returns NULL.", htddt);
 		if (!add){
 			zfs_burst_dedup_dbgmsg("=====burst-dedup=====not add, just return.");
 			return (NULL);
 		}
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====add, so alloc a new htdde and insert.");
 		htdde = htddt_alloc(&htdde_search.htdde_key);
 		avl_insert(&htddt->htddt_tree, htdde, where);
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====add, so alloc a new htdde(%px) and insert in htddt(%px).", htdde, htddt);
 	}
 	else{
 		if(found != NULL){
 			*found = B_TRUE;
 		}
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_find returns htdde.");
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_find returns htdde(%px).", htdde);
 	}
 	return htdde;
 }
@@ -365,20 +365,20 @@ bstt_lookup(bstt_t *bstt, bstt_key_t *bstk, boolean_t add, boolean_t *found)
 		if(found != NULL){
 			*found = B_FALSE;
 		}
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_find returns NULL.");
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_find in bstt(%px) returns NULL.", bstt);
 		if (!add){
 			zfs_burst_dedup_dbgmsg("=====burst-dedup=====not add, just return.");
 			return (NULL);
 		}
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====add, so alloc a new bste and insert.");
 		bste = bstt_alloc(&bste_search.bste_key);
 		avl_insert(&bstt->bstt_tree, bste, where);
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====add, so alloc a new bste(%px) and insert in bstt(%px).", bste, bstt);
 	}
 	else{
 		if(found != NULL){
 			*found = B_TRUE;
 		}
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_find returns bste.");
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_find returns bste(%px).", bste);
 	}
 	return bste;
 }
@@ -498,13 +498,27 @@ bstt_phys_addref(zio_t *zio, bstt_phys_t *bstp)
 	ddt_entry_t *dde = bstp->bstp_dde;
 	bstp->bstp_refcnt++;
 	if(dde->dde_lead_zio[p] != NULL){
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====dde->dde_lead_zio[p] != NULL, zio: %px", zio);
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====dde->dde_lead_zio[p] != NULL, dde: %px, dde_lead_zio[p(==%u)]: %px, zio: %px",
+		dde,
+		p,
+		dde->dde_lead_zio[p],
+		zio);
 		zio_add_child(zio, dde->dde_lead_zio[p]);
 	}
 	else{
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====before refcnt +1. refcnt: %llu, zio: %px", dde->dde_phys[p].ddp_refcnt, zio);
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====before dde->dde_phys[p] refcnt +1. refcnt: %llu, dde: %px,  dde->dde_phys[p(==%u)]: %px, zio: %px",
+		dde->dde_phys[p].ddp_refcnt,
+		dde,
+		p,
+		&(dde->dde_phys[p]),
+		zio);
 		ddt_phys_addref(&(dde->dde_phys[p]));
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====after refcnt +1. refcnt: %llu, zio: %px", dde->dde_phys[p].ddp_refcnt, zio);
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====after dde->dde_phys[p] refcnt +1. refcnt: %llu, dde: %px,  dde->dde_phys[p(==%u)]: %px, zio: %px",
+		dde->dde_phys[p].ddp_refcnt,
+		dde,
+		p,
+		&(dde->dde_phys[p]),
+		zio);
 	}
 }
 
@@ -557,18 +571,16 @@ bstt_create_burst(burst_t *burst, abd_t *based_data, uint64_t based_data_size, a
     burst->length = new_data_size - pos  - burst->start_pos;
     
 	abd_size = burst->length > SPA_MINBLOCKSIZE ? P2ROUNDUP_TYPED(burst->length, SPA_MINBLOCKSIZE, uint64_t) : SPA_MINBLOCKSIZE;
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====burst: start_pos: %d, end_pos: %d, length: %lu, roundup to: %llu", burst->start_pos, burst->end_pos, burst->length, abd_size);
 	burst->data = abd_alloc(abd_size, B_FALSE);
+	zfs_burst_dedup_dbgmsg("=====burst-dedup=====burst: data: %px, start_pos: %d, end_pos: %d, length: %lu, roundup to: %llu", burst->data, burst->start_pos, burst->end_pos, burst->length, burst->data->abd_size);
+
 	if(burst->length > 0){
         abd_copy_off(burst->data, new_data, 0, (size_t)burst->start_pos, burst->length);
     }
     else{
         burst->length = 0;
-		// dummy value
-		unsigned char * burst_data_buf = abd_borrow_buf_copy(burst->data, 1);
-		memset(burst_data_buf, 0, 1);
-		abd_return_buf_copy(burst->data, burst_data_buf, 1);
     }
+	abd_zero_off(burst->data, burst->length, abd_size - burst->length);
 	//  zfs_dbgmsg("burst: start_pos: %d, end_pos: %d, length: %lu", burst->start_pos, burst->end_pos, burst->length);
 
 }
@@ -580,6 +592,6 @@ bstt_create_data(burst_t *burst, abd_t *based_data, uint64_t based_data_size, ab
 	abd_copy_off(new_data, based_data, 0, 0, (size_t)burst->start_pos);
 	abd_copy_off(new_data, burst->data, (size_t)burst->start_pos, 0, burst->length);
 	abd_copy_off(new_data, based_data, (size_t)burst->start_pos + burst->length, burst->end_pos + 1, based_data_size - (size_t)burst->end_pos - 1);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====burst: start_pos: %d, end_pos: %d, length: %lu, roundup to: %llu", burst->start_pos, burst->end_pos, burst->length, burst->data->abd_size);
+	zfs_burst_dedup_dbgmsg("=====burst-dedup=====burst: data: %px, start_pos: %d, end_pos: %d, length: %lu, roundup to: %llu", burst->data, burst->start_pos, burst->end_pos, burst->length, burst->data->abd_size);
 
 }
