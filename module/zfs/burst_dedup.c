@@ -484,10 +484,15 @@ void
 bstt_bp_fill(bstt_phys_t *bstp, blkptr_t *bp, uint64_t txg)
 {
 	ASSERT(txg != 0);
+	
 	/* TODO: set virtual address for bp from ddp */
 	for (int d = 0; d < SPA_DVAS_PER_BP; d++)
 		bp->blk_dva[d] = bstp->bstp_burst_dva[d];
 	BP_SET_BIRTH(bp, txg, bstp->bstp_phys_birth);
+	BP_SET_LSIZE(bp, BSTP_GET_LSIZE(bstp));
+	BP_SET_PSIZE(bp, BSTP_GET_PSIZE(bstp));
+	BP_SET_COMPRESS(bp, BSTP_GET_COMPRESS(bstp));
+	BP_SET_CRYPT(bp, BSTP_GET_CRYPT(bstp));
 }
 
 
