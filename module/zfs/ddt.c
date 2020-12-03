@@ -753,9 +753,8 @@ void
 ddt_remove(ddt_t *ddt, ddt_entry_t *dde)
 {
 	ASSERT(MUTEX_HELD(&ddt->ddt_lock));
-
+	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt_remove dde: %px", dde);
 	avl_remove(&ddt->ddt_tree, dde);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt_remove: freed dde: %px", dde);
 	ddt_free(dde);
 }
 
@@ -1096,6 +1095,9 @@ ddt_sync_table(ddt_t *ddt, dmu_tx_t *tx, uint64_t txg)
 			dde->dde_type = ntype;
 			dde->dde_class = nclass;
 			ddt_stat_update(ddt, dde, 0);
+		}
+		else{
+			ddt_remove(ddt, dde);
 		}	 
  	}
 

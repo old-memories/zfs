@@ -36,7 +36,7 @@ extern "C" {
 #endif
 
 #define MIN_BLOCK_SIZE 1
-#define MAX_HTDDP_REFCNT UINT64_MAX
+#define MAX_HTDDP_REFCNT 1
 #define HTDDT_HT_RIGHTSHIFT 3
 
 typedef struct ddt_entry ddt_entry_t;
@@ -123,7 +123,8 @@ typedef struct burst {
     // [start_pos, end_pos]
     int end_pos;
     size_t length;
-    abd_t *data;
+    abd_t *burst_abd;
+    uint64_t burst_abd_size;
 } burst_t;
 
 /*
@@ -227,7 +228,9 @@ extern void bstt_sync_table(bstt_t *bstt, ddt_t *ddt, uint64_t txg);
 extern int bstt_entry_compare(const void *x1, const void *x2);
 extern void bstt_bstp_fill(bstt_phys_t *bstp, blkptr_t *bp);
 extern void bstt_bp_fill(bstt_phys_t *bstp, blkptr_t *bp, uint64_t txg);
+extern void bstt_bp_create(enum zio_checksum checksum, bstt_key_t *bstk, bstt_phys_t *bstp, blkptr_t *bp);
 extern void bstt_phys_addref(zio_t *zio, bstt_phys_t *bstp);
+extern void bstt_phys_free(bstt_t *bstt, bstt_key_t *bstk, bstt_phys_t *bstp, uint64_t txg);
 /*
     checksum
 */
