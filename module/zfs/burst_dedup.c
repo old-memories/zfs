@@ -315,6 +315,7 @@ bstt_free(bstt_entry_t *bste)
 {
 	zfs_burst_dedup_dbgmsg("=====burst-dedup=====bstt_free: freed bste: %px", bste);
 	if(bste->bste_phys.bstp_burst.burst_abd != NULL){
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====abd_free burst_abd: freed bste: %px", bste);
 		abd_free(bste->bste_phys.bstp_burst.burst_abd);
 		bste->bste_phys.bstp_burst.burst_abd = NULL;
 	}
@@ -548,7 +549,6 @@ bstt_phys_free(bstt_t *bstt, bstt_key_t *bstk, bstt_phys_t *bstp, uint64_t txg)
 	 */
 	BP_SET_DEDUP(&blk, 0);
 
-	bzero(bstp, sizeof (*bstp));
 	zio_free(bstt->bstt_spa, txg, &blk);
 }
 

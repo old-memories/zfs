@@ -200,7 +200,6 @@ extern void ddt_bp_create(enum zio_checksum checksum, const ddt_key_t *ddk,
 extern void ddt_key_fill(ddt_key_t *ddk, const blkptr_t *bp);
 
 extern void ddt_phys_fill(ddt_phys_t *ddp, const blkptr_t *bp);
-extern void ddt_phys_clear(ddt_phys_t *ddp);
 extern void ddt_phys_addref(ddt_phys_t *ddp);
 extern void ddt_phys_decref(ddt_phys_t *ddp);
 extern void ddt_phys_free(ddt_t *ddt, ddt_key_t *ddk, ddt_phys_t *ddp,

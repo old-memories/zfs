@@ -321,12 +321,6 @@ ddt_phys_fill(ddt_phys_t *ddp, const blkptr_t *bp)
 }
 
 void
-ddt_phys_clear(ddt_phys_t *ddp)
-{
-	bzero(ddp, sizeof (*ddp));
-}
-
-void
 ddt_phys_addref(ddt_phys_t *ddp)
 {
 	
@@ -355,7 +349,6 @@ ddt_phys_free(ddt_t *ddt, ddt_key_t *ddk, ddt_phys_t *ddp, uint64_t txg)
 	 */
 	BP_SET_DEDUP(&blk, 0);
 
-	ddt_phys_clear(ddp);
 	zio_free(ddt->ddt_spa, txg, &blk);
 }
 

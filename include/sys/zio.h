@@ -477,7 +477,8 @@ struct zio {
 
 	struct abd   *based_io_abd;
 	uint64_t      based_io_size;
-	struct burst *burst;
+	struct abd   *burst_io_abd;
+	uint64_t      burst_io_size;
 
 	/* Stuff for the vdev stack */
 	vdev_t		*io_vd;

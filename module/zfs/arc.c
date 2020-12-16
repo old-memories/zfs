@@ -2140,6 +2140,27 @@ arc_buf_fill(arc_buf_t *buf, spa_t *spa, const zbookmark_phys_t *zb,
 	IMPLY(encrypted, ARC_BUF_COMPRESSED(buf));
 	IMPLY(encrypted, !ARC_BUF_SHARED(buf));
 
+	if(HDR_GET_COMPRESS(hdr) == ZIO_COMPRESS_BURST){
+		zfs_burst_dedup_dbgmsg( "HDR_GET_COMPRESS(hdr) == ZIO_COMPRESS_BURST, copy b_babd(%px) of hdr(%px) to buf(%px), b_burst_hdr.bsize: %llu, HDR_GET_LSIZE: %llu",
+		hdr->b_burst_hdr.b_babd,
+		hdr,
+		buf,
+		hdr->b_burst_hdr.b_size,
+		HDR_GET_LSIZE(hdr));
+		if(hdr->b_burst_hdr.b_babd != NULL && hdr->b_burst_hdr.b_size == HDR_GET_LSIZE(hdr)){
+			zfs_burst_dedup_dbgmsg("TRUE: hdr(%px)->b_burst_hdr.b_babd(%px) != NULL && hdr->b_burst_hdr.b_size == HDR_GET_LSIZE(hdr), buf: %px, buf->b_data: %px, hdr: %px", hdr, hdr->b_burst_hdr.b_babd, buf, buf->b_data);
+			// ASSERT3U(hdr->b_burst_hdr.b_size, ==, HDR_GET_LSIZE(hdr));
+			abd_copy_to_buf(buf->b_data, hdr->b_burst_hdr.b_babd, HDR_GET_LSIZE(hdr));
+			abd_free(hdr->b_burst_hdr.b_babd);
+			hdr->b_burst_hdr.b_babd = NULL;
+			hdr->b_burst_hdr.b_size = 0;
+		} else {
+			zfs_burst_dedup_dbgmsg("FALSE: hdr->b_burst_hdr.b_babd != NULL && hdr->b_burst_hdr.b_size == HDR_GET_LSIZE(hdr), hdr: %px", hdr);
+		}
+		goto byteswap;
+	} 
+
+
 	/*
 	 * If the caller wanted encrypted data we just need to copy it from
 	 * b_rabd and potentially byteswap it. We won't be able to do any
@@ -2261,16 +2282,6 @@ arc_buf_fill(arc_buf_t *buf, spa_t *spa, const zbookmark_phys_t *zb,
 		if (arc_buf_try_copy_decompressed_data(buf)) {
 			/* Skip byteswapping and checksumming (already done) */
 			return (0);
-		} else if(HDR_GET_COMPRESS(hdr) == ZIO_COMPRESS_BURST){
-			ASSERT3U(hdr->b_burst_hdr.b_size, ==, HDR_GET_LSIZE(hdr));
-			zfs_burst_dedup_dbgmsg( "HDR_GET_COMPRESS(hdr) == ZIO_COMPRESS_BURST, copy b_babd(%px) of hdr(%px) to buf(%px), lsize %d",hdr->b_burst_hdr.b_babd,
-			hdr,
-			buf,
-			HDR_GET_LSIZE(hdr));
-			abd_copy_to_buf(buf->b_data, hdr->b_burst_hdr.b_babd, HDR_GET_LSIZE(hdr));
-			abd_free(hdr->b_burst_hdr.b_babd);
-			hdr->b_burst_hdr.b_babd = NULL;
-			hdr->b_burst_hdr.b_size = 0;
 		} else {
 			error = zio_decompress_data(HDR_GET_COMPRESS(hdr),
 			    hdr->b_l1hdr.b_pabd, buf->b_data,
@@ -5984,16 +5995,14 @@ arc_read_done(zio_t *zio)
 	}
 
 	if(BP_GET_COMPRESS(bp) == ZIO_COMPRESS_BURST){
-		zfs_burst_dedup_dbgmsg("BP_GET_COMPRESS(bp) == ZIO_COMPRESS_BURST, set hdr->b_burst_hdr = zio->io_orig_abd(%px), abd_size: %llu, hdr: %px, bp: %px, zio: %px",
-		zio->io_orig_abd,
-		zio->io_orig_size,
+		zfs_burst_dedup_dbgmsg("BP_GET_COMPRESS(bp) == ZIO_COMPRESS_BURST, set hdr->b_burst_hdr = zio->burst_io_abd(%px), abd_size: %llu, hdr: %px, bp: %px, zio: %px",
+		zio->burst_io_abd,
+		zio->burst_io_size,
 		hdr,
 		bp,
 		zio);
-		hdr->b_burst_hdr.b_babd = zio->io_orig_abd;
-		hdr->b_burst_hdr.b_size = zio->io_orig_size;
-		zio->io_orig_abd = zio->io_abd;
-		zio->io_orig_size = zio->io_size;
+		hdr->b_burst_hdr.b_babd = zio->burst_io_abd;
+		hdr->b_burst_hdr.b_size = zio->burst_io_size;
 	}
 
 	if (zio->io_error == 0) {
