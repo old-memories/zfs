@@ -2911,9 +2911,9 @@ zio_ddt_based_read_done(zio_t *zio)
 
 	zio_t *pio = zio_unique_parent(zio);
 
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====before bstt_create_data, current zio: %px, burst_io_abd: %px, burst_io_size: %llu, based_io_size: %llu,  burst_abd_size: %llu", zio, pio->burst_io_abd, pio->burst_io_size, pio->based_io_size, burst->burst_abd_size);
-	bstt_create_data(burst, pio->based_io_abd, pio->based_io_size, pio->burst_io_abd, pio->burst_io_size);
-	abd_free(pio->based_io_abd);
+	// zfs_burst_dedup_dbgmsg("=====burst-dedup=====before bstt_create_data, current zio: %px, burst_io_abd: %px, burst_io_size: %llu, based_io_size: %llu,  burst_abd_size: %llu", zio, pio->burst_io_abd, pio->burst_io_size, pio->based_io_size, burst->burst_abd_size);
+	bstt_create_data(burst, zio->io_abd, zio->io_size, pio->io_abd, pio->io_size);
+	abd_free(zio->io_abd);
 }
 
 
@@ -2924,7 +2924,7 @@ zio_ddt_read_start(zio_t *zio)
 	ddt_t *ddt = ddt_select(zio->io_spa, bp);
 
 	ASSERT(BP_GET_DEDUP(bp));
-	ASSERT(BP_GET_PSIZE(bp) == zio->io_size);
+	// ASSERT(BP_GET_PSIZE(bp) == zio->io_size);
 	ASSERT(zio->io_child_type == ZIO_CHILD_LOGICAL);
 	zfs_burst_dedup_dbgmsg("=====burst-dedup=====start ddt read. bp: %px, blk_cksum: %llx-%llx-%llx-%llx, prop: %llu, zio: %px",
 	bp,
@@ -2981,7 +2981,6 @@ zio_ddt_read_start(zio_t *zio)
 					bstt_bp_create(ddt->ddt_checksum, &(bste->bste_key), &(bste->bste_phys), &burst_blk);
 					
 					zfs_burst_dedup_dbgmsg("=====burst-dedup=====bste(%px) has empty burst_abd, load it first. zio: %px", bste, zio);
-					ASSERT3U(zio->io_size, ==, burst->burst_abd_size);
 					ASSERT3U(BP_GET_PSIZE(&burst_blk), ==, burst->burst_abd_size);
 					burst->burst_abd = abd_alloc(burst->burst_abd_size, B_FALSE);
 
@@ -2995,13 +2994,10 @@ zio_ddt_read_start(zio_t *zio)
 				blkptr_t based_blk;
 				ddt_bp_create(ddt->ddt_checksum, &(bstp_dde->dde_key), bstp_ddp, &based_blk);
 
-				zio->based_io_abd = abd_alloc(bste->bste_phys.bstp_abd_size, B_FALSE);
-				zio->based_io_size = bste->bste_phys.bstp_abd_size;
-				zio->burst_io_abd = abd_alloc(BP_GET_LSIZE(bp), B_FALSE);
-				zio->burst_io_size = BP_GET_LSIZE(bp);
+				abd_t *based_io_abd = abd_alloc(bste->bste_phys.bstp_abd_size, B_FALSE);
 
 				zfs_burst_dedup_dbgmsg("=====burst-dedup=====before read based_data. abd_size: %llu, zio: %px", bste->bste_phys.bstp_abd_size, zio);
-				zio_t *based_io = zio_read(zio, zio->io_spa, &based_blk, zio->based_io_abd, zio->based_io_size, zio_ddt_based_read_done, burst, zio->io_priority,
+				zio_t *based_io = zio_read(zio, zio->io_spa, &based_blk, based_io_abd, based_io_abd->abd_size, zio_ddt_based_read_done, burst, zio->io_priority,
 				ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark);	
 				
 				zfs_burst_dedup_dbgmsg("=====burst-dedup=====create based_io: %px, zio: %px", based_io, zio);
@@ -3524,14 +3520,13 @@ burst:
 
 	blkptr_t based_blk;
 	ddt_phys_t *bstp_ddp = &(bste->bste_phys.bstp_dde->dde_phys[bste->bste_phys.bstp_dde_p]);
-	zio->based_io_abd = abd_alloc(bste->bste_phys.bstp_abd_size, B_FALSE);
-	zio->based_io_size = bste->bste_phys.bstp_abd_size;
+	abd_t *based_io_abd = abd_alloc(bste->bste_phys.bstp_abd_size, B_FALSE);
 	ddt_bp_create(ddt->ddt_checksum, &(bste->bste_phys.bstp_dde->dde_key), bstp_ddp, &based_blk);
 	
 	zfs_burst_dedup_dbgmsg("=====burst-dedup=====read based_data according to bste(%px), abd_size: %llu, zio: %px",bste, bste->bste_phys.bstp_abd_size, zio);
 
 	zio_t *based_io = zio_read(zio, zio->io_spa, &based_blk,
-	zio->based_io_abd, zio->based_io_size, NULL, NULL, zio->io_priority,
+	based_io_abd, based_io_abd->abd_size, NULL, NULL, zio->io_priority,
 	ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark);
 	
 	zio_wait(based_io);
@@ -3541,8 +3536,8 @@ burst:
 	zfs_burst_dedup_dbgmsg("=====burst-dedup=====bstt_create_burst, based_io: %px, zio: %px", based_io, zio);
 	
 	burst_t *burst = &(bste->bste_phys.bstp_burst);
-	bstt_create_burst(burst, zio->based_io_abd, zio->based_io_size, zio->io_orig_abd, zio->io_orig_size);
-	abd_free(zio->based_io_abd);
+	bstt_create_burst(burst, based_io_abd, based_io_abd->abd_size, zio->io_orig_abd, zio->io_orig_size);
+	abd_free(based_io_abd);
 
 	ASSERT3U(BP_GET_LSIZE(bp), ==, BP_GET_PSIZE(bp));
 	BP_SET_PSIZE(bp, burst->burst_abd_size);
