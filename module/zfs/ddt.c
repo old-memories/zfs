@@ -558,13 +558,75 @@ ddt_get_dedup_dspace(spa_t *spa)
 uint64_t
 ddt_get_pool_dedup_ratio(spa_t *spa)
 {
-	ddt_stat_t dds_total = { 0 };
-	//ddt_grnerate_dedup_histogram(spa);
-	ddt_get_dedup_stats(spa, &dds_total);
-	if (dds_total.dds_dsize == 0)
+	
+	uint64_t total_ddt_dedupratio_ref_size = 0;
+	uint64_t total_ddt_dedupratio_size = 0;
+	for (enum zio_checksum c = 0; c < ZIO_CHECKSUM_FUNCTIONS; c++) {
+		
+		ddt_t *ddt = spa->spa_ddt[c];
+		bstt_t *bstt = spa->spa_bstt[c]; 
+
+		if(!ddt->ddt_dedupratio_updated){
+			total_ddt_dedupratio_ref_size += ddt->ddt_dedupratio_ref_size;
+			total_ddt_dedupratio_size += ddt->ddt_dedupratio_size;
+			continue;
+		}
+
+		ddt->ddt_dedupratio_ref_size = 0;
+		ddt->ddt_dedupratio_size = 0;
+
+		ddt_entry_t *dde, *dde_next;
+
+		for (dde = avl_first(&ddt->ddt_tree); dde != NULL; dde = dde_next) {
+			
+			dde_next = AVL_NEXT(&ddt->ddt_tree, dde);
+			
+			if (dde->dde_class == DDT_CLASS_DUPLICATE || dde->dde_class == DDT_CLASS_UNIQUE) {
+				
+				ddt_phys_t *ddp = dde->dde_phys;
+				ddt_key_t *ddk = &dde->dde_key;
+				uint64_t psize = DDK_GET_PSIZE(ddk);
+
+				for (int p = 0; p < DDT_PHYS_TYPES; p++, ddp++) {
+					
+					uint64_t refcnt = ddp->ddp_refcnt;
+
+					if (ddp->ddp_phys_birth == 0)
+						continue;
+					
+					ddt->ddt_dedupratio_ref_size += psize * refcnt;
+					ddt->ddt_dedupratio_size += psize;
+				}
+				
+			}	 
+ 		}
+		
+		bstt_entry_t *bste, *bste_next;
+
+		for (bste = avl_first(&bstt->bstt_tree); bste != NULL; bste = bste_next) {
+			
+			bste_next = AVL_NEXT(&bstt->bstt_tree, bste);
+							
+			bstt_phys_t *bstp = &(bste->bste_phys);
+
+			uint64_t psize = BSTP_GET_PSIZE(bstp);
+
+			if (bstp->bstp_phys_birth != 0){
+				ddt->ddt_dedupratio_size += psize;
+			}
+					
+ 		}
+		
+		ddt->ddt_dedupratio_updated = 0;
+		total_ddt_dedupratio_ref_size += ddt->ddt_dedupratio_ref_size;
+		total_ddt_dedupratio_size += ddt->ddt_dedupratio_size;
+	}
+
+	if (total_ddt_dedupratio_size == 0)
 		return (100);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====dds_ref_dsize: %llu, dds_dsize: %llu",dds_total.dds_ref_dsize,dds_total.dds_dsize);
-	return (dds_total.dds_ref_dsize * 100 / dds_total.dds_dsize);
+	return (total_ddt_dedupratio_ref_size * 100 / total_ddt_dedupratio_size);
+ 
+
 }
 
 int
@@ -708,7 +770,6 @@ ddt_alloc(const ddt_key_t *ddk)
 	ddt_entry_t *dde;
 
 	dde = kmem_cache_alloc(ddt_entry_cache, KM_SLEEP);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt_alloc: dde allocated dde: %px", dde);
 	bzero(dde, sizeof (ddt_entry_t));
 	cv_init(&dde->dde_cv, NULL, CV_DEFAULT, NULL);
 
@@ -729,7 +790,6 @@ ddt_free(ddt_entry_t *dde)
 		abd_free(dde->dde_repair_abd);
 
 	cv_destroy(&dde->dde_cv);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt_free: freed dde: %px", dde);
 	kmem_cache_free(ddt_entry_cache, dde);
 }
 
@@ -746,7 +806,6 @@ void
 ddt_remove(ddt_t *ddt, ddt_entry_t *dde)
 {
 	ASSERT(MUTEX_HELD(&ddt->ddt_lock));
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt_remove dde: %px", dde);
 	avl_remove(&ddt->ddt_tree, dde);
 	ddt_free(dde);
 }
@@ -754,7 +813,6 @@ ddt_remove(ddt_t *ddt, ddt_entry_t *dde)
 static void
 ddt_remove_all(ddt_t *ddt)
 {
-	// ASSERT(MUTEX_HELD(&bstt->bstt_lock));
 	ddt_entry_t *dde;
 	void *cookie = NULL;
 	while ((dde = avl_destroy_nodes(&ddt->ddt_tree, &cookie)) != NULL) {
@@ -766,37 +824,28 @@ ddt_entry_t *
 ddt_lookup(ddt_t *ddt, const blkptr_t *bp, boolean_t add, boolean_t *found)
 {
 	ddt_entry_t *dde, dde_search;
-	// enum ddt_type type;
-	// enum ddt_class class;
 	avl_index_t where;
-	// int error;
 	
 
 	ASSERT(MUTEX_HELD(&ddt->ddt_lock));
-	/*TODO: looking up ddt */
 	ddt_key_fill(&dde_search.dde_key, bp);
 	char blkbuf[BP_SPRINTF_LEN];
 	snprintf_blkptr(blkbuf, sizeof(blkbuf), bp);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====start looking up in ddt(%px)... spa name: %s, bp: %s", ddt, spa_name(ddt->ddt_spa), blkbuf);
 	dde = avl_find(&ddt->ddt_tree, &dde_search, &where);
 	if (dde == NULL) {
 		if(found != NULL){
 			*found = B_FALSE;
 		}
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_find in ddt(%px) returns NULL.", ddt);
 		if (!add){
-			zfs_burst_dedup_dbgmsg("=====burst-dedup=====not add, just return.");
 			return (NULL);
 		}
 		dde = ddt_alloc(&dde_search.dde_key);
 		avl_insert(&ddt->ddt_tree, dde, where);
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====add, so alloc a new dde(%px) and insert in ddt(%px).", dde, ddt);
 	}
 	else{
 		if(found != NULL){
 			*found = B_TRUE;
 		}
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====avl_find returns dde(%px).", dde);
 	}
 
 	
@@ -936,7 +985,6 @@ ddt_load(spa_t *spa)
 void
 ddt_unload(spa_t *spa)
 {
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====unloading ddt tables...");
 	for (enum zio_checksum c = 0; c < ZIO_CHECKSUM_FUNCTIONS; c++) {
 		if (spa->spa_ddt[c]) {
 			ddt_remove_all(spa->spa_ddt[c]);
@@ -1016,7 +1064,6 @@ ddt_repair_done(ddt_t *ddt, ddt_entry_t *dde)
 			avl_insert(&ddt->ddt_repair_tree, dde, where);
 		}
 	else{
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt_remove: freed dde: %px", dde);
 		ddt_free(dde);
 	}
 
@@ -1051,11 +1098,11 @@ ddt_sync_table(ddt_t *ddt, dmu_tx_t *tx, uint64_t txg)
 	ASSERT(spa->spa_uberblock.ub_version >= SPA_VERSION_DEDUP);
 
 
-	for (enum ddt_type type = 0; type < DDT_TYPES; type++) {
-		for (enum ddt_class class = 0; class < DDT_CLASSES; class++) {
-			ddt_histogram_set_empty(&ddt->ddt_histogram[type][class]);
-		}
-	}
+	// for (enum ddt_type type = 0; type < DDT_TYPES; type++) {
+	// 	for (enum ddt_class class = 0; class < DDT_CLASSES; class++) {
+	// 		ddt_histogram_set_empty(&ddt->ddt_histogram[type][class]);
+	// 	}
+	// }
 	for (dde = avl_first(&ddt->ddt_tree); dde != NULL; dde = dde_next) {
 		dde_next = AVL_NEXT(&ddt->ddt_tree, dde);
 		ddp = dde->dde_phys;
@@ -1087,7 +1134,7 @@ ddt_sync_table(ddt_t *ddt, dmu_tx_t *tx, uint64_t txg)
 		if (total_refcnt != 0) {
 			dde->dde_type = ntype;
 			dde->dde_class = nclass;
-			ddt_stat_update(ddt, dde, 0);
+			// ddt_stat_update(ddt, dde, 0);
 		}
 		else{
 			ddt_remove(ddt, dde);
@@ -1095,8 +1142,8 @@ ddt_sync_table(ddt_t *ddt, dmu_tx_t *tx, uint64_t txg)
  	}
 
 	 
-	bcopy(ddt->ddt_histogram, &ddt->ddt_histogram_cache,
-	    sizeof (ddt->ddt_histogram));
+	// bcopy(ddt->ddt_histogram, &ddt->ddt_histogram_cache,
+	//     sizeof (ddt->ddt_histogram));
 	spa->spa_dedup_dspace = ~0ULL;
 
 }

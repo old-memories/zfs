@@ -38,6 +38,8 @@ extern "C" {
 #define MIN_BLOCK_SIZE 1
 #define MAX_HTDDP_REFCNT 1
 #define HTDDT_HT_RIGHTSHIFT 3
+#define HTDDT_HTSIZE(total_size) \
+    P2ROUNDUP_TYPED(total_size >> HTDDT_HT_RIGHTSHIFT, MIN_BLOCK_SIZE, uint64_t)
 
 typedef struct ddt_entry ddt_entry_t;
 
@@ -120,7 +122,6 @@ typedef struct htddt_key_cmp {
 */
 typedef struct burst {
     int start_pos;
-    // [start_pos, end_pos]
     int end_pos;
     size_t length;
     abd_t *burst_abd;
@@ -205,7 +206,7 @@ typedef struct bstt_key_cmp {
 extern htddt_t *htddt_select(spa_t *spa, const blkptr_t *bp, enum htddt_type type);
 extern void htddt_init(void);
 extern void htddt_fini(void);
-extern htddt_entry_t *htddt_lookup(htddt_t *htddt, htddt_key_t *htddk, boolean_t add, boolean_t *found);
+extern htddt_entry_t *htddt_lookup(htddt_t *htddt, htddt_key_t *htddk, boolean_t add);
 extern void htddt_remove(htddt_t *htddt, htddt_entry_t *htdde);
 extern void htddt_create(spa_t *spa);
 extern void htddt_unload(spa_t *spa);
@@ -213,14 +214,13 @@ extern void htddt_sync_table(htddt_t *htddt, ddt_t *ddt);
 extern void htddt_bstp_fill(htddt_entry_t *htdde, bstt_phys_t *bstp);
 extern void htddt_phys_addref(zio_t *zio, htddt_phys_t *htddp);
 extern int htddt_entry_compare(const void *x1, const void *x2);
-extern uint64_t htddt_htsize(uint64_t size);
 /*
     burst
 */
 extern bstt_t *bstt_select(spa_t *spa, const blkptr_t *bp);
 extern void bstt_init(void);
 extern void bstt_fini(void);
-extern bstt_entry_t *bstt_lookup(bstt_t *bstt, bstt_key_t *bstk, boolean_t add, boolean_t *found);
+extern bstt_entry_t *bstt_lookup(bstt_t *bstt, bstt_key_t *bstk, boolean_t add);
 extern void bstt_remove(bstt_t *bstt, bstt_entry_t *bste);
 extern void bstt_create(spa_t *spa);
 extern void bstt_unload(spa_t *spa);
@@ -231,11 +231,6 @@ extern void bstt_bp_fill(bstt_phys_t *bstp, blkptr_t *bp, uint64_t txg);
 extern void bstt_bp_create(enum zio_checksum checksum, bstt_key_t *bstk, bstt_phys_t *bstp, blkptr_t *bp);
 extern void bstt_phys_addref(zio_t *zio, bstt_phys_t *bstp);
 extern void bstt_phys_free(bstt_t *bstt, bstt_key_t *bstk, bstt_phys_t *bstp, uint64_t txg);
-/*
-    checksum
-*/
-// extern void htddt_checksum_compute(htddt_key_t *htddk, enum zio_checksum htddt_checksum, abd_t *total_abd, uint64_t total_size, uint64_t ht_size);
-// extern void zio_print_abd_data(zio_t *zio);
 
 extern void bstt_create_burst(burst_t *burst, abd_t *based_data, uint64_t based_data_size, abd_t *new_data, uint64_t new_data_size);
 extern void bstt_create_data(burst_t *burst, abd_t *based_data, uint64_t based_data_size, abd_t *new_data, uint64_t new_data_size);

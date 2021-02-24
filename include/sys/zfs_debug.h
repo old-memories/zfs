@@ -86,6 +86,11 @@ extern void __dprintf(boolean_t dprint, const char *file, const char *func,
  * $ echo 1 >/sys/module/zfs/parameters/zfs_flags
  */
 
+/*
+ *
+ * zfs_burst_dedup_dbgmsg() is used to test new zfs burst deduplication functions
+ *
+ */
 #define	zfs_burst_dedup_dbgmsg(...) \
 	if (zfs_dbgmsg_enable) \
 		__dprintf(B_FALSE, __FILE__, __func__, __LINE__, __VA_ARGS__)

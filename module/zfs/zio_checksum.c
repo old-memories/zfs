@@ -416,7 +416,6 @@ zio_checksum_error_impl(spa_t *spa, const blkptr_t *bp,
 		return (SET_ERROR(EINVAL));
 
 	if(bp != NULL && BP_GET_COMPRESS(bp) == ZIO_COMPRESS_BURST){
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====BP_GET_COMPRESS(bp) == ZIO_COMPRESS_BURST, so skip checksum check, bp: %px", bp);
 		return (0);
 	}
 
@@ -574,23 +573,15 @@ zio_checksum_templates_free(spa_t *spa)
  * Compute checksum of head\tail dde.
  */
 void
-htddt_checksum_compute(spa_t *spa, enum zio_checksum htddt_checksum, abd_t *total_abd, uint64_t total_size, uint64_t ht_size, uint64_t ht_off, zio_cksum_t *cksum)
+htddt_checksum_compute(spa_t *spa, enum zio_checksum htddt_checksum, abd_t *ht_abd, uint64_t ht_size, zio_cksum_t *cksum)
 {
-	ASSERT(ht_size <= total_size);
-	abd_t *ht_abd = NULL;
 	zio_checksum_info_t *ci = &zio_checksum_table[htddt_checksum];
 
 	ASSERT((uint_t)htddt_checksum < ZIO_CHECKSUM_FUNCTIONS);
 	ASSERT(ci->ci_func[0] != NULL);
 
+	ASSERT0(ci->ci_flags & ZCHECKSUM_FLAG_EMBEDDED);
 	
-	if (ci->ci_flags & ZCHECKSUM_FLAG_EMBEDDED) {
-		ZIO_SET_CHECKSUM(cksum, 0, 0, 0, 0);
-	} else {
-		zio_checksum_template_init(htddt_checksum, spa);
-    	ht_abd = abd_alloc_linear(ht_size, B_FALSE);
-		abd_copy_off(ht_abd, total_abd, 0, ht_off, ht_size);
-		ci->ci_func[0](ht_abd, ht_size, spa->spa_cksum_tmpls[htddt_checksum], cksum);
-		abd_free(ht_abd);
-	}
+	zio_checksum_template_init(htddt_checksum, spa);
+	ci->ci_func[0](ht_abd, ht_size, spa->spa_cksum_tmpls[htddt_checksum], cksum);
 }

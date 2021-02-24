@@ -2263,12 +2263,6 @@ arc_buf_fill(arc_buf_t *buf, spa_t *spa, const zbookmark_phys_t *zb,
 			/* Skip byteswapping and checksumming (already done) */
 			return (0);
 		} else if(HDR_GET_COMPRESS(hdr) == ZIO_COMPRESS_BURST){
-			zfs_burst_dedup_dbgmsg( "HDR_GET_COMPRESS(hdr) == ZIO_COMPRESS_BURST, copy b_pabd(%px) of hdr(%px) to buf(%px), b_l1hdr.bsize: %llu, HDR_GET_LSIZE: %llu",
-			hdr->b_l1hdr.b_pabd,
-			hdr,
-			buf,
-			hdr->b_l1hdr.b_pabd->abd_size,
-			HDR_GET_LSIZE(hdr));
 			abd_copy_to_buf(buf->b_data, hdr->b_l1hdr.b_pabd, HDR_GET_LSIZE(hdr));
 
 		} else {

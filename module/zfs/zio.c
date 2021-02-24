@@ -2906,12 +2906,7 @@ static void
 zio_ddt_based_read_done(zio_t *zio)
 {
 	burst_t *burst = zio->io_private;
-	
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_ddt_based_read_done start. zio: %px", zio);
-
 	zio_t *pio = zio_unique_parent(zio);
-
-	// zfs_burst_dedup_dbgmsg("=====burst-dedup=====before bstt_create_data, current zio: %px, burst_io_abd: %px, burst_io_size: %llu, based_io_size: %llu,  burst_abd_size: %llu", zio, pio->burst_io_abd, pio->burst_io_size, pio->based_io_size, burst->burst_abd_size);
 	bstt_create_data(burst, zio->io_abd, zio->io_size, pio->io_abd, pio->io_size);
 	abd_free(zio->io_abd);
 }
@@ -2924,52 +2919,32 @@ zio_ddt_read_start(zio_t *zio)
 	ddt_t *ddt = ddt_select(zio->io_spa, bp);
 
 	ASSERT(BP_GET_DEDUP(bp));
-	// ASSERT(BP_GET_PSIZE(bp) == zio->io_size);
 	ASSERT(zio->io_child_type == ZIO_CHILD_LOGICAL);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====start ddt read. bp: %px, blk_cksum: %llx-%llx-%llx-%llx, prop: %llu, zio: %px",
-	bp,
-	bp->blk_cksum.zc_word[0],
-	bp->blk_cksum.zc_word[1],
-	bp->blk_cksum.zc_word[2],
-	bp->blk_cksum.zc_word[3],
-	bp->blk_prop,
-	zio);
 
 
 	if(BP_GET_COMPRESS(bp) != ZIO_COMPRESS_BURST){
 		zio_nowait(zio_read(zio, zio->io_spa, bp, zio->io_abd, zio->io_size, NULL, NULL, zio->io_priority, ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark));
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_ddt_read_start end. zio: %px", zio);
 		return (zio);	
 	}
 	else{
 		ddt_enter(ddt);
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt entered. ddt: %px, zio: %px", ddt, zio);
 		bstt_t *bstt = bstt_select(zio->io_spa, bp);
 		bstt_entry_t *bste;
 		bstt_key_t bstk_search;
-		boolean_t found_bste = B_FALSE;
 		bstk_search.bstk_cksum = bp->blk_cksum;
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====find bste in bstt(%px) zio: %px", bstt, zio);	
-		bste = bstt_lookup(bstt, &bstk_search, B_FALSE, &found_bste);
-		if(found_bste && bste != NULL){
-			zfs_burst_dedup_dbgmsg("=====burst-dedup=====found bste(%px) in bstt(%px) zio: %px", bste, bstt, zio);
+		bste = bstt_lookup(bstt, &bstk_search, B_FALSE);
+		if(bste != NULL){
 			ddt_entry_t *bstp_dde = bste->bste_phys.bstp_dde;	
 			if(ddt_exist(ddt, bstp_dde)){
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====one valid based dde(%px) found. zio: %px", bstp_dde, zio);			
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====We have to wait for based_dde's io finishing. zio: %px", zio);
-				
 				uint8_t bstp_p = bste->bste_phys.bstp_dde_p;
 				ddt_phys_t *bstp_ddp = &(bstp_dde->dde_phys[bstp_p]);
 		
 				if(bstp_dde->dde_lead_zio[bstp_p] != NULL){
-					zfs_burst_dedup_dbgmsg("=====burst-dedup=====bstp_dde->dde_lead_zio[bstp_p] != NULL. zio: %px", zio);
 					zfs_burst_dedup_dbgmsg("=====burst-dedup=====based_data not ready, restart current zio: %px", zio);
 					zio_pop_transforms(zio);
 					zio->io_stage = ZIO_STAGE_OPEN;	
 					zio->io_pipeline = ZIO_READ_PIPELINE;
-					zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
 					ddt_exit(ddt);
-					zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_ddt_read_start end. zio: %px", zio);
 					return (zio);
 				}
 
@@ -2984,11 +2959,8 @@ zio_ddt_read_start(zio_t *zio)
 					ASSERT3U(BP_GET_PSIZE(&burst_blk), ==, burst->burst_abd_size);
 					burst->burst_abd = abd_alloc(burst->burst_abd_size, B_FALSE);
 
-					zfs_burst_dedup_dbgmsg("=====burst-dedup=====before read burst_data, current zio: %px, zio_abd_size: %llu, psize: %llu, lsize: %llu, burst_abd_size: %llu", zio, zio->io_size, BP_GET_PSIZE(&burst_blk), BP_GET_LSIZE(&burst_blk), burst->burst_abd_size);
-
 					zio_wait(zio_read(zio, zio->io_spa, &burst_blk, burst->burst_abd, burst->burst_abd_size, NULL, NULL, zio->io_priority, ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark));
 					
-					zfs_burst_dedup_dbgmsg("=====burst-dedup=====after read burst_data, error: %d, zio: %px", zio->io_error, zio);
 				}
 				
 				blkptr_t based_blk;
@@ -2996,26 +2968,18 @@ zio_ddt_read_start(zio_t *zio)
 
 				abd_t *based_io_abd = abd_alloc(bste->bste_phys.bstp_abd_size, B_FALSE);
 
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====before read based_data. abd_size: %llu, zio: %px", bste->bste_phys.bstp_abd_size, zio);
 				zio_t *based_io = zio_read(zio, zio->io_spa, &based_blk, based_io_abd, based_io_abd->abd_size, zio_ddt_based_read_done, burst, zio->io_priority,
 				ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark);	
-				
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====create based_io: %px, zio: %px", based_io, zio);
 
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
 				ddt_exit(ddt);
 				zio_nowait(based_io);
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_ddt_read_start end. zio: %px", zio);
 				return (zio);	
 			}
-			zfs_burst_dedup_dbgmsg("=====burst-dedup=====no valid based dde found. zio: %px", ddt, zio);			
 		}
 		else{
 			zfs_burst_dedup_dbgmsg("=====burst-dedup=====no dde or bste found. ddt: %px, zio: %px", ddt, zio);
 		}
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
 		ddt_exit(ddt);	
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_ddt_read_start end. zio: %px", zio);
 		return (zio);	
 	}
 
@@ -3024,21 +2988,10 @@ zio_ddt_read_start(zio_t *zio)
 static zio_t *
 zio_ddt_read_done(zio_t *zio)
 {
-	blkptr_t *bp = zio->io_bp;
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====start ddt read done. bp: %px, blk_cksum: %llx-%llx-%llx-%llx, prop: %llu, zio: %px",
-	bp,
-	bp->blk_cksum.zc_word[0],
-	bp->blk_cksum.zc_word[1],
-	bp->blk_cksum.zc_word[2],
-	bp->blk_cksum.zc_word[3],
-	bp->blk_prop,
-	zio);
 	if (zio_wait_for_children(zio, ZIO_CHILD_DDT_BIT, ZIO_WAIT_DONE)) {
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====TRUE: zio_wait_for_children(zio, ZIO_CHILD_DDT_BIT, ZIO_WAIT_DONE), zio: %px", zio);
 		return (NULL);
 	}
 
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_ddt_read_done end. zio: %px", zio);
 	return (zio);
 }
 
@@ -3147,27 +3100,20 @@ zio_ddt_burst_write_ready(zio_t *zio)
 	ddt_t *ddt = ddt_select(zio->io_spa, zio->io_bp);
 	zio_t *pio = NULL;
 
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_ddt_burst_write_ready start. zio: %px", zio);
 	if (zio->io_error)
 		return;
 	char blkbuf[BP_SPRINTF_LEN];
 	snprintf_blkptr(blkbuf, sizeof(blkbuf), zio->io_bp);
 
 	ddt_enter(ddt);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt entered. ddt: %px, zio: %px", ddt, zio);	
 
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====bstt_bstp_fill. zio: %px, bp: %s", zio, blkbuf);
 	bstt_bstp_fill(&(bste->bste_phys), zio->io_bp);
 
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====for all parents bstt_bp_fill(bste: %px). zio: %px, bp: %s", bste, zio, blkbuf);
 	zio_link_t *zl = NULL;
 	while ((pio = zio_walk_parents(zio, &zl)) != NULL)
 		bstt_bp_fill(&(bste->bste_phys), pio->io_bp, zio->io_txg);
 	
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
 	ddt_exit(ddt);      
-
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_ddt_burst_write_ready end. zio: %px", zio);
 }
 
 static void
@@ -3177,13 +3123,10 @@ zio_ddt_burst_write_done(zio_t *zio)
 	ddt_t *ddt = ddt_select(zio->io_spa, zio->io_bp);
 	zio_t *pio = NULL;
 	
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_ddt_burst_write_done start. zio: %px", zio);
 	ddt_enter(ddt);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt entered. ddt: %px, zio: %px", ddt, zio);
 	
 	bste->bste_lead_burst_io = NULL;
 	
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====for all parents bstt_phys_addref(bste: %px). ddt: %px, zio: %px", bste, ddt, zio);
 	zio_link_t *zl = NULL;
 	while ((pio = zio_walk_parents(zio, &zl)) != NULL){
 		bstt_phys_addref(zio, &(bste->bste_phys));
@@ -3193,10 +3136,7 @@ zio_ddt_burst_write_done(zio_t *zio)
 	abd_free(zio->io_abd);
 	bste->bste_phys.bstp_burst.burst_abd = NULL;
 
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
 	ddt_exit(ddt);
-
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_ddt_burst_write_done end. zio: %px", zio);
 
 }
 
@@ -3210,41 +3150,33 @@ zio_ddt_child_write_ready(zio_t *zio)
 	ddt_phys_t *ddp = &dde->dde_phys[p];
 	zio_t *pio;
 
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_ddt_child_write_ready start. zio: %px", zio);
-
 	if (zio->io_error)
 		return;
 
 	ddt_enter(ddt);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt entered. ddt: %px, zio: %px", ddt, zio);
 
 	ASSERT(dde->dde_lead_zio[p] == zio);
 
 	char blkbuf[BP_SPRINTF_LEN];
 	snprintf_blkptr(blkbuf, sizeof(blkbuf), zio->io_bp);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====before ddt_phys_fill. zio: %px, bp: %s", zio, blkbuf);
 	ddt_phys_fill(ddp, zio->io_bp);
 
 	zio_link_t *zl = NULL;
 	while ((pio = zio_walk_parents(zio, &zl)) != NULL)
 		ddt_bp_fill(ddp, pio->io_bp, zio->io_txg);
 	
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
 	ddt_exit(ddt);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_ddt_child_write_ready end. zio: %px", zio);
 }
 
 static void
 zio_ddt_child_write_done(zio_t *zio)
 {
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_ddt_child_write_done start. zio: %px", zio);
 	int p = zio->io_prop.zp_copies;
 	ddt_t *ddt = ddt_select(zio->io_spa, zio->io_bp);
 	ddt_entry_t *dde = zio->io_private;
 	ddt_phys_t *ddp = &dde->dde_phys[p];
 
 	ddt_enter(ddt);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt entered. ddt: %px, zio: %px", ddt, zio);
 
 	ASSERT(ddp->ddp_refcnt == 0);
 	ASSERT(dde->dde_lead_zio[p] == zio);
@@ -3252,27 +3184,20 @@ zio_ddt_child_write_done(zio_t *zio)
 	
 	char blkbuf[BP_SPRINTF_LEN];
 	snprintf_blkptr(blkbuf, sizeof(blkbuf), zio->io_bp);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====before while: zio_walk_parents. zio: %px, bp: %s", zio, blkbuf);
 	zio_link_t *zl = NULL;
 	while (zio_walk_parents(zio, &zl) != NULL){
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====before refcnt +1. refcnt: %llu, dde: %px, zio: %px", ddp->ddp_refcnt, dde, zio);
 		ddt_phys_addref(ddp);
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====after refcnt +1. refcnt: %llu, dde: %px, zio: %px", ddp->ddp_refcnt, dde, zio);	
 	}
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
 	ddt_exit(ddt);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_ddt_child_write_done end. zio: %px", zio);
 }
 
 
 static boolean_t
 zio_handle_collision(zio_t *zio, ddt_t *ddt, ddt_entry_t *dde)
 {
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====start zio_handle_collision, zio: %px", zio);
 	ASSERT(MUTEX_HELD(&ddt->ddt_lock));
 	zio_prop_t *zp = &zio->io_prop;
 	blkptr_t *bp = zio->io_bp;
-	//checksum collision? That could rarely happen.
 	if (zp->zp_dedup_verify && zio_ddt_collision(zio, ddt, dde)) {
 		/*
 		 * If we're using a weak checksum, upgrade to a strong checksum
@@ -3293,11 +3218,8 @@ zio_handle_collision(zio_t *zio, ddt_t *ddt, ddt_entry_t *dde)
 		}
 		ASSERT(!BP_GET_DEDUP(bp));
 		zio->io_pipeline = ZIO_WRITE_PIPELINE;
-		// ddt_exit(ddt);
-		// return (zio);
 		return B_TRUE;
 	}else{
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====no zio_ddt_collision.");
 		return B_FALSE;
 	}
 }
@@ -3314,75 +3236,51 @@ zio_ddt_write(zio_t *zio)
 	htddt_t *hddt = htddt_select(spa, bp, HTDDT_TYPE_HEAD);
 	htddt_t *tddt = htddt_select(spa, bp ,HTDDT_TYPE_TAIL);
 	bstt_t *bstt = bstt_select(spa, bp);
-	uint64_t htsize_debug = htddt_htsize(zio->io_orig_size);
 
 	ddt_entry_t *dde = NULL;
-	htddt_entry_t *hdde = NULL;
-	htddt_entry_t *tdde = NULL;
+	htddt_entry_t *htdde = NULL;
 	bstt_entry_t *bste = NULL;
 
 
-	htddt_key_t htddk_search;
+	htddt_key_t hddk_search;
+	htddt_key_t tddk_search;
 	bstt_key_t bstk_search;
 
-	// // for debug usage
+	// for debug usage
 	
 	boolean_t found_dde = B_FALSE;
-	boolean_t found_hdde = B_FALSE;
-	boolean_t found_tdde = B_FALSE;
-	boolean_t found_bste = B_FALSE;
 	
 
 	ASSERT(BP_GET_DEDUP(bp));
 	ASSERT(BP_GET_CHECKSUM(bp) == zp->zp_checksum);
 	ASSERT(BP_IS_HOLE(bp) || zio->io_bp_override);
 	ASSERT(!(zio->io_bp_override && (zio->io_flags & ZIO_FLAG_RAW)));
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====start ddt write. bp: %px, blk_cksum: %llx-%llx-%llx-%llx, prop: %llu, p: %llu, zio: %px",
-	bp,
-	bp->blk_cksum.zc_word[0],
-	bp->blk_cksum.zc_word[1],
-	bp->blk_cksum.zc_word[2],
-	bp->blk_cksum.zc_word[3],
-	bp->blk_prop,
-	p,
-	zio);
-
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====first lookup bp(%px) in ddt(%px), zio: %px", bp, ddt, zio);
-
 	ddt_enter(ddt);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt entered. ddt: %px, zio: %px", ddt, zio);
 
 // --------------------------------------------------------------------------------------------
+
+	ddt->ddt_dedupratio_updated = 1;
 
 	dde = ddt_lookup(ddt, bp, B_TRUE, &found_dde);
 
 	if(zio_handle_collision(zio, ddt, dde)){
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
 		ddt_exit(ddt);
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====end ddt write. zio: %px", zio);
 		return (zio);
 	
 	}
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====zio_handle_collision passed. zio: %px", zio);
 
 	if(found_dde){
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt_lookup found a dde(%px). zio: %px", dde, zio);
 		ddt_phys_t *ddp= &dde->dde_phys[p];
 		if (ddp->ddp_phys_birth != 0 || dde->dde_lead_zio[p] != NULL) {
-			zfs_burst_dedup_dbgmsg("=====burst-dedup=====TRUE: ddp->ddp_phys_birth != 0 || dde->dde_lead_zio[p] != NULL, zio: %px", zio);
 			if (ddp->ddp_phys_birth != 0){
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====TRUE: ddp->ddp_phys_birth != 0, zio: %px", zio);
 				ddt_bp_fill(ddp, bp, txg);
 
 			}
 			if (dde->dde_lead_zio[p] != NULL){
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====TRUE: dde->dde_lead_zio[p] != NULL, zio: %px", zio);
 				zio_add_child(zio, dde->dde_lead_zio[p]);
 			}
 			else{
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====before ddp(dde: %px) refcnt +1. refcnt: %llu, dde: %px, zio: %px", dde, ddp->ddp_refcnt, dde, zio);
 				ddt_phys_addref(ddp);
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====after ddp(dde: %px) refcnt +1. refcnt: %llu, dde: %px, zio: %px", dde, ddp->ddp_refcnt, dde, zio);
 			}
 		} else if (zio->io_bp_override) {
 			zfs_burst_dedup_dbgmsg("=====burst-dedup=====TRUE: zio->io_bp_override, zio: %px", zio);
@@ -3395,135 +3293,98 @@ zio_ddt_write(zio_t *zio)
 			zfs_burst_dedup_dbgmsg("=====burst-dedup=====ALERT: could this happen? , zio: %px", zio);
 		}
 
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
 		ddt_exit(ddt);
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====end ddt write. zio: %px", zio);
 		return (zio);		
 	}
 // --------------------------------------------------------------------------------------------
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt_lookup did not find a dde, zio: %px", zio);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====set bste for search, zio: %px", zio );
 	bstk_search.bstk_cksum = bp->blk_cksum;
-	bste = bstt_lookup(bstt, &bstk_search, B_FALSE, &found_bste);
-	if(found_bste && bste != NULL){
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====bstt_lookup found a bste(%px) in bstt(%px), zio: %px", bste, bstt, zio);
+	bste = bstt_lookup(bstt, &bstk_search, B_FALSE);
+	if(bste != NULL){
 		if(ddt_exist(ddt, bste->bste_phys.bstp_dde)){
-			zfs_burst_dedup_dbgmsg("=====burst-dedup=====one valid based dde(%px) found. zio: %px", bste->bste_phys.bstp_dde, zio);
-			zfs_burst_dedup_dbgmsg("=====burst-dedup=====We found bste so we delete dde allocated before, zio: %px", zio);
 			ddt_remove(ddt, dde);
 			if(bste->bste_phys.bstp_phys_birth != 0){
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====bste->bste_phys.bstp_phys_birth != 0. zio: %px", zio);
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====bstt_bp_fill，zio: %px", zio);
 				bstt_bp_fill(&(bste->bste_phys), bp, txg);
 			}
 			if(bste->bste_lead_burst_io != NULL){
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====bste->bste_lead_burst_io != NULL. zio: %px", zio);
 				zio_add_child(zio, bste->bste_lead_burst_io);
 			}
 			else{
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====bstt_phys_addref. zio: %px", zio);
 				bstt_phys_addref(zio, &(bste->bste_phys));
 			}			
-			zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
 			ddt_exit(ddt);
-			zfs_burst_dedup_dbgmsg("=====burst-dedup=====end ddt write. zio: %px", zio);
 			return (zio);	
 		}
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====bste: %px 's based dde did not exist in ddt: %px , zio: %px", bste, ddt, zio);
 	}
 // --------------------------------------------------------------------------------------------
-
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====bstt_lookup did not find a bste, zio: %px", zio);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====set head dde for search in hddt(%px), zio: %px", hddt, zio);
-	ZIO_SET_CHECKSUM(&(htddk_search.htddk_cksum), 0, 0, 0, 0);
-	htddk_search.htddk_type = HTDDT_TYPE_HEAD;
-	// compute head\tail's checksum and set htdde
-	htddt_checksum_compute(spa, zp->zp_checksum, zio->io_orig_abd, zio->io_orig_size, htsize_debug, 0, &(htddk_search.htddk_cksum));
-	hdde = htddt_lookup(hddt, &htddk_search, B_FALSE, &found_hdde);
-	// found hdde and refcnt < MAX_HTDDP_REFCNT
-	if(found_hdde && hdde != NULL){
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====htddt_lookup found a hdde(%px), zio: %px", hdde, zio);
-		if(hdde->htdde_phys.htddp_refcnt < (uint64_t)MAX_HTDDP_REFCNT){
-			zfs_burst_dedup_dbgmsg("=====burst-dedup=====htddt_lookup found a valid hdde(%px) and refcnt(%llu) < MAX_HTDDP_REFCNT(%llu), zio: %px", hdde, hdde->htdde_phys.htddp_refcnt, (uint64_t)MAX_HTDDP_REFCNT, zio);
-			if(ddt_exist(ddt, hdde->htdde_phys.htddp_dde)){
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====htddt_lookup found a valid hdde(%px) and refcnt(%llu) < MAX_HTDDP_REFCNT(%llu) and based dde(%px) exists, zio: %px", hdde, hdde->htdde_phys.htddp_refcnt, (uint64_t)MAX_HTDDP_REFCNT, hdde->htdde_phys.htddp_dde, zio);
-				goto burst;
-			}
-			else{
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====htddt_lookup found a valid hdde(%px) and refcnt(%llu) < MAX_HTDDP_REFCNT(%llu) but based dde did not exist, zio: %px", hdde, hdde->htdde_phys.htddp_refcnt, (uint64_t)MAX_HTDDP_REFCNT, zio);
-			}			
-		}
-	}
-
-	found_hdde = B_FALSE;
 	
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====set tail dde for search in tddt(%px), zio: %px", tddt, zio);
-	ZIO_SET_CHECKSUM(&(htddk_search.htddk_cksum), 0, 0, 0, 0);
-	htddk_search.htddk_type = HTDDT_TYPE_TAIL;
+	
+	abd_t *habd = abd_alloc_linear(HTDDT_HTSIZE(zio->io_orig_size), B_FALSE);
+	abd_copy_off(habd, zio->io_orig_abd, 0, 0, HTDDT_HTSIZE(zio->io_orig_size));
+	htddt_checksum_compute(spa, zp->zp_checksum, habd, HTDDT_HTSIZE(zio->io_orig_size), &(hddk_search.htddk_cksum));
+	abd_free(habd);
+	
+	hddk_search.htddk_type = HTDDT_TYPE_HEAD;
 	// compute head\tail's checksum and set htdde
-	htddt_checksum_compute(spa, zp->zp_checksum, zio->io_orig_abd, zio->io_orig_size, htsize_debug, zio->io_orig_size - htsize_debug, &(htddk_search.htddk_cksum));
-	tdde = htddt_lookup(tddt, &htddk_search, B_FALSE, &found_tdde);
+	htdde = htddt_lookup(hddt, &hddk_search, B_FALSE);
+	// found hdde and refcnt < MAX_HTDDP_REFCNT
+	if(htdde != NULL){
+		if(htdde->htdde_phys.htddp_refcnt < (uint64_t)MAX_HTDDP_REFCNT){
+			if(ddt_exist(ddt, htdde->htdde_phys.htddp_dde)){
+				goto new_bste;
+			}		
+		}
+	}
+	
+	abd_t *tabd = abd_alloc_linear(HTDDT_HTSIZE(zio->io_orig_size), B_FALSE);
+	abd_copy_off(tabd, zio->io_orig_abd, 0, zio->io_orig_size - HTDDT_HTSIZE(zio->io_orig_size), HTDDT_HTSIZE(zio->io_orig_size));
+	htddt_checksum_compute(spa, zp->zp_checksum, tabd, HTDDT_HTSIZE(zio->io_orig_size), &(tddk_search.htddk_cksum));
+	abd_free(tabd);
+
+	tddk_search.htddk_type = HTDDT_TYPE_TAIL;
+	// compute head\tail's checksum and set htdde
+	htdde = htddt_lookup(tddt, &tddk_search, B_FALSE);
 	// found tdde and refcnt < MAX_HTDDP_REFCNT
-	if(found_tdde && tdde != NULL){
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====htddt_lookup found a tdde, zio: %px", zio);
-		if(tdde->htdde_phys.htddp_refcnt < (uint64_t)MAX_HTDDP_REFCNT){
-			zfs_burst_dedup_dbgmsg("=====burst-dedup=====htddt_lookup found a valid tdde(%px) and refcnt(%llu) < MAX_HTDDP_REFCNT(%llu), zio: %px", tdde, tdde->htdde_phys.htddp_refcnt, (uint64_t)MAX_HTDDP_REFCNT, zio);
-			if(ddt_exist(ddt, tdde->htdde_phys.htddp_dde)){
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====htddt_lookup found a valid tdde(%px) and refcnt(%llu) < MAX_HTDDP_REFCNT(%llu) and based dde(%px) exists, zio: %px", tdde, tdde->htdde_phys.htddp_refcnt, (uint64_t)MAX_HTDDP_REFCNT, tdde->htdde_phys.htddp_dde, zio);
-				goto burst;
-			}
-			else{
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====htddt_lookup found a valid tdde(%px) and refcnt(%llu) < MAX_HTDDP_REFCNT(%llu) but based dde did not exist, zio: %px", tdde, tdde->htdde_phys.htddp_refcnt, (uint64_t)MAX_HTDDP_REFCNT, zio);
-			}			
+	if(htdde != NULL){
+		if(htdde->htdde_phys.htddp_refcnt < (uint64_t)MAX_HTDDP_REFCNT){
+			if(ddt_exist(ddt, htdde->htdde_phys.htddp_dde)){
+				goto new_bste;
+			}	
 		}
 	}
 
-	found_tdde = B_FALSE;
-	goto write;
+	goto new_htdde;
 // ------------------------------------------------------------------------------------------
 	
-burst:
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====We found htdde so we delete dde allocated before, zio: %px", zio);
-	ddt_remove(ddt, dde);
-
-
-
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====before read based_data, zio: %px", zio);
-	
-	ddt_entry_t *htddp_dde = (found_hdde ? hdde : tdde)->htdde_phys.htddp_dde;
-	uint8_t htddp_p = (found_hdde ? hdde : tdde)->htdde_phys.htddp_dde_p;
-	while(htddp_dde->dde_lead_zio[htddp_p] != NULL){
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====(found_hdde ? hdde : tdde)->dde_lead_zio[htddp_p] != NULL. We have to wait for based_dde's io finishing. zio: %px", zio);
-		zio_pop_transforms(zio);
-		zio->io_stage = ZIO_STAGE_OPEN;	
-		zio->io_pipeline = ZIO_WRITE_PIPELINE;
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
-		ddt_exit(ddt);
-		return (zio);
+new_bste:
+		
+	if(htdde->htdde_phys.htddp_dde->dde_lead_zio[htdde->htdde_phys.htddp_dde_p] != NULL){
+		/*
+		   we should create a new dde now and just view this block as a totally new block.
+		   We do not create any new htdde so that we are more likely to avoid this situation happen again.
+		   Note that the new dde cannot be burst deduped because we do not create any htdde.
+		*/
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====not ready, new dde, zio: %px", zio);
+		goto new_zio;
+		
+		
 	}
-
-
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====based_dde's io finished. create based_io, zio: %px", zio);
+	
+	ddt_remove(ddt, dde);
 
 	// create new bste
 	bstk_search.bstk_cksum = bp->blk_cksum;
-	bste = bstt_lookup(bstt, &bstk_search, B_TRUE, &found_bste);
-	if(found_bste && bste != NULL){
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====found_bste && bste(%px) != NULL, we have to create a new bete, zio: %px", bste, zio);
-	}
+	bste = bstt_lookup(bstt, &bstk_search, B_TRUE);
 
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====htddt_bstp_fill, zio: %px", zio);
-	htddt_bstp_fill(found_hdde ? hdde : tdde, &(bste->bste_phys));	
+
+	htddt_bstp_fill(htdde, &(bste->bste_phys));	
 	
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====add htdde's(%px) refcnt, zio: %px",(found_hdde ? hdde : tdde), zio);
-	htddt_phys_addref(zio, &((found_hdde ? hdde : tdde)->htdde_phys));
+	htddt_phys_addref(zio, &(htdde->htdde_phys));
 
 	blkptr_t based_blk;
 	ddt_phys_t *bstp_ddp = &(bste->bste_phys.bstp_dde->dde_phys[bste->bste_phys.bstp_dde_p]);
 	abd_t *based_io_abd = abd_alloc(bste->bste_phys.bstp_abd_size, B_FALSE);
 	ddt_bp_create(ddt->ddt_checksum, &(bste->bste_phys.bstp_dde->dde_key), bstp_ddp, &based_blk);
 	
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====read based_data according to bste(%px), abd_size: %llu, zio: %px",bste, bste->bste_phys.bstp_abd_size, zio);
 
 	zio_t *based_io = zio_read(zio, zio->io_spa, &based_blk,
 	based_io_abd, based_io_abd->abd_size, NULL, NULL, zio->io_priority,
@@ -3531,10 +3392,6 @@ burst:
 	
 	zio_wait(based_io);
 
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====read based_data finished, current zio: %px, based io: %px", zio, based_io);
-	
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====bstt_create_burst, based_io: %px, zio: %px", based_io, zio);
-	
 	burst_t *burst = &(bste->bste_phys.bstp_burst);
 	bstt_create_burst(burst, based_io_abd, based_io_abd->abd_size, zio->io_orig_abd, zio->io_orig_size);
 	abd_free(based_io_abd);
@@ -3543,70 +3400,45 @@ burst:
 	BP_SET_PSIZE(bp, burst->burst_abd_size);
 	BP_SET_COMPRESS(bp, ZIO_COMPRESS_BURST);
 	
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====create burst_io to write new burst, abd_size: %llu, zio: %px", burst->burst_abd_size, zio);
-
 	zio_t *burst_io = zio_write(zio, zio->io_spa, zio->io_txg, bp, burst->burst_abd,
 		burst->burst_abd_size, burst->burst_abd_size, &zio->io_prop,
 		zio_ddt_burst_write_ready, NULL, NULL,
 		zio_ddt_burst_write_done, bste, zio->io_priority,
 		ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark);
 
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====set bste->bste_lead_burst_io, burst_io: %px, zio: %px", burst_io, zio);
 	bste->bste_lead_burst_io = burst_io;
 
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);	
 	ddt_exit(ddt);
 	zio_nowait(burst_io);
-	zfs_burst_dedup_dbgmsg("end ddt write. zio: %px", zio);
 	return (zio);	
 	
 // -------------------------------------------------------------------------------------------
 
-write:
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====We did not find dde or htdde, zio: %px", zio);
-	ZIO_SET_CHECKSUM(&(htddk_search.htddk_cksum), 0, 0, 0, 0);
-	htddk_search.htddk_type = HTDDT_TYPE_HEAD;
-	// compute head\tail's checksum and set htdde
-	htddt_checksum_compute(spa, zp->zp_checksum, zio->io_orig_abd, zio->io_orig_size, htsize_debug, 0, &(htddk_search.htddk_cksum));
-	hdde = htddt_lookup(hddt, &htddk_search, B_TRUE, &found_hdde);
-	if(found_hdde){
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====found hdde when inserting, so replace old hdde by new allocated hdde(%px). zio: %px", hdde, zio);
-	}
-	hdde->htdde_phys.htddp_dde = dde;
-	hdde->htdde_phys.htddp_dde_p = p;
-	hdde->htdde_phys.htddp_refcnt = 0;
-	hdde->htdde_phys.htddp_abd_size = zio->io_orig_size;
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====set head dde for insert, htddp_dde: %px, htddp_abd_size: %llu zio: %px", dde, zio->io_orig_size, zio);
+new_htdde:	
+	htdde = htddt_lookup(hddt, &hddk_search, B_TRUE);
+	htdde->htdde_phys.htddp_dde = dde;
+	htdde->htdde_phys.htddp_dde_p = p;
+	htdde->htdde_phys.htddp_refcnt = 0;
+	htdde->htdde_phys.htddp_abd_size = zio->io_orig_size;
+	
+	htdde = htddt_lookup(tddt, &tddk_search, B_TRUE);
+	htdde->htdde_phys.htddp_dde = dde;
+	htdde->htdde_phys.htddp_dde_p = p;
+	htdde->htdde_phys.htddp_refcnt = 0;
+	htdde->htdde_phys.htddp_abd_size = zio->io_orig_size;
 
+new_zio: ;
 
-	ZIO_SET_CHECKSUM(&(htddk_search.htddk_cksum), 0, 0, 0, 0);
-	htddk_search.htddk_type = HTDDT_TYPE_TAIL;
-	// compute head\tail's checksum and set htdde
-	htddt_checksum_compute(spa, zp->zp_checksum, zio->io_orig_abd, zio->io_orig_size, htsize_debug, zio->io_orig_size - htsize_debug, &(htddk_search.htddk_cksum));
-	tdde = htddt_lookup(tddt, &htddk_search, B_TRUE, &found_tdde);
-	if(found_tdde){
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====found tdde when inserting, so replace old tdde by new allocated tdde(%px). zio: %px", tdde, zio);
-	}
-	tdde->htdde_phys.htddp_dde = dde;
-	tdde->htdde_phys.htddp_dde_p = p;
-	tdde->htdde_phys.htddp_refcnt = 0;
-	tdde->htdde_phys.htddp_abd_size = zio->io_orig_size;
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====set tail dde for insert, htddp_dde: %px, htddp_abd_size: %llu zio: %px", dde, zio->io_orig_size, zio);
-
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====write data, zio: %px", zio);
-		zio_t *cio = zio_write(zio, spa, txg, bp, zio->io_orig_abd,
-		zio->io_orig_size, zio->io_orig_size, zp,
-		zio_ddt_child_write_ready, NULL, NULL,
-		zio_ddt_child_write_done, dde, zio->io_priority,
-		ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark);
+	zio_t *cio = zio_write(zio, spa, txg, bp, zio->io_orig_abd,
+							zio->io_orig_size, zio->io_orig_size, zp,
+							zio_ddt_child_write_ready, NULL, NULL,
+							zio_ddt_child_write_done, dde, zio->io_priority,
+							ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark);
 	zio_push_transform(cio, zio->io_abd, zio->io_size, 0, NULL);
 	dde->dde_lead_zio[p] = cio;
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====set dde->dde_lead_zio[p], dde: %px, dde_lead_zio: %px, zio: %px,", dde, cio, zio);
 
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
 	ddt_exit(ddt);
 	zio_nowait(cio);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====end ddt write. zio: %px", zio);
 	return (zio);	
 }
 
@@ -3623,7 +3455,6 @@ zio_ddt_free(zio_t *zio)
 
 	//burst dedup variables
 	boolean_t found_dde = B_FALSE;
-	boolean_t found_bste = B_FALSE;
 	bstt_t *bstt = bstt_select(spa, bp);
 	bstt_key_t bstk_search;
 	bstt_entry_t *bste;
@@ -3634,20 +3465,13 @@ zio_ddt_free(zio_t *zio)
 	ASSERT(zio->io_child_type == ZIO_CHILD_LOGICAL);
 
 	ddt_enter(ddt);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt entered. ddt: %px, zio: %px", ddt, zio);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====first ddt_lookup, zio: %px", zio);
 	freedde = dde = ddt_lookup(ddt, bp, B_FALSE, &found_dde);
 	if (found_dde) {
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====found dde(%px), find ddp according to bp's dva and birth, zio: %px", dde, zio);
-		// find ddp according to bp's dva and birth
 		ddp = ddt_phys_select(dde, bp);
 		if (ddp){
-			zfs_burst_dedup_dbgmsg("=====burst-dedup=====before ddp(dde: %px) refcnt -1. refcnt: %llu, zio: %px", dde, ddp->ddp_refcnt, zio);
 			ddt_phys_decref(ddp);
-			zfs_burst_dedup_dbgmsg("=====burst-dedup=====after ddp(dde: %px) refcnt -1. refcnt: %llu, zio: %px", dde, ddp->ddp_refcnt, zio);
 		}
 		ddt_exit(ddt);
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
 		return (zio);
 	}
 
@@ -3655,32 +3479,23 @@ zio_ddt_free(zio_t *zio)
 	// bstt_enter(bstt);
 	dde = NULL;
 	bstk_search.bstk_cksum = bp->blk_cksum;
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt_lookup found no dde, so bstt_lookup, zio: %px", zio);
-	bste = bstt_lookup(bstt, &bstk_search, B_FALSE, &found_bste);
-	if(found_bste && bste != NULL){
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====found bste(%px), zio: %px", bste, zio);
+	bste = bstt_lookup(bstt, &bstk_search, B_FALSE);
+	if(bste != NULL){
 		based_dde = bste->bste_phys.bstp_dde;
 		if(ddt_exist(ddt, based_dde)){
 			based_ddp = &(based_dde->dde_phys[bste->bste_phys.bstp_dde_p]);
 			if (based_ddp){
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====before based_ddp(dde: %px) refcnt -1. refcnt: %llu, zio: %px", based_dde, based_ddp->ddp_refcnt, zio);
 				ddt_phys_decref(based_ddp);
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====after based_ddp(dde: %px) refcnt -1. refcnt: %llu, zio: %px", based_dde, based_ddp->ddp_refcnt, zio);
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====before bste_phys(bste: %px) refcnt -1. refcnt: %llu, zio: %px", bste, bste->bste_phys.bstp_refcnt, zio);
 				bste->bste_phys.bstp_refcnt--;
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====after bste_phys(bste: %px) refcnt -1. refcnt: %llu, zio: %px", bste, bste->bste_phys.bstp_refcnt, zio);
 				ddt_exit(ddt);
-				zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
 				return (zio);
 			}
 		}
-		zfs_burst_dedup_dbgmsg("=====burst-dedup=====bste->bste_phys.bstp_dde not exist, zio: %px", zio);
 	}
 	else{
 		zfs_burst_dedup_dbgmsg("=====burst-dedup=====This could not happen!");
 	}
 	ddt_exit(ddt);
-	zfs_burst_dedup_dbgmsg("=====burst-dedup=====ddt exited. ddt: %px, zio: %px", ddt, zio);
 	return (zio);
 
 

@@ -63,3 +63,4 @@ cscope.*
 *.orig
 *.log
 venv
+.vscode

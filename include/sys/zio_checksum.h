@@ -137,7 +137,7 @@ extern enum zio_checksum spa_dedup_checksum(spa_t *spa);
 extern void zio_checksum_templates_free(spa_t *spa);
 extern spa_feature_t zio_checksum_to_feature(enum zio_checksum cksum);
 
-extern void htddt_checksum_compute(spa_t *spa, enum zio_checksum htddt_checksum, abd_t *total_abd, uint64_t total_size, uint64_t ht_size, uint64_t ht_off, zio_cksum_t *cksum);
+extern void htddt_checksum_compute(spa_t *spa, enum zio_checksum htddt_checksum, abd_t *ht_abd, uint64_t ht_size, zio_cksum_t *cksum);
 
 
 #ifdef	__cplusplus

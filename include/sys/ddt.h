@@ -146,6 +146,9 @@ struct ddt {
 	ddt_histogram_t	ddt_histogram[DDT_TYPES][DDT_CLASSES];
 	ddt_histogram_t	ddt_histogram_cache[DDT_TYPES][DDT_CLASSES];
 	ddt_object_t	ddt_object_stats[DDT_TYPES][DDT_CLASSES];
+	uint64_t ddt_dedupratio_size;
+	uint64_t ddt_dedupratio_ref_size;
+	uint8_t ddt_dedupratio_updated;
 	avl_node_t	ddt_node;
 };
 
