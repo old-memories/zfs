@@ -3317,12 +3317,7 @@ zio_ddt_write(zio_t *zio)
 	}
 // --------------------------------------------------------------------------------------------
 	
-	
-	abd_t *habd = abd_alloc_linear(HTDDT_HTSIZE(zio->io_orig_size), B_FALSE);
-	abd_copy_off(habd, zio->io_orig_abd, 0, 0, HTDDT_HTSIZE(zio->io_orig_size));
-	htddt_checksum_compute(spa, zp->zp_checksum, habd, HTDDT_HTSIZE(zio->io_orig_size), &(hddk_search.htddk_cksum));
-	abd_free(habd);
-	
+	hddk_search.htddk_cksum = bp->blk_h_cksum;
 	hddk_search.htddk_type = HTDDT_TYPE_HEAD;
 	// compute head\tail's checksum and set htdde
 	htdde = htddt_lookup(hddt, &hddk_search, B_FALSE);
@@ -3334,12 +3329,8 @@ zio_ddt_write(zio_t *zio)
 			}		
 		}
 	}
-	
-	abd_t *tabd = abd_alloc_linear(HTDDT_HTSIZE(zio->io_orig_size), B_FALSE);
-	abd_copy_off(tabd, zio->io_orig_abd, 0, zio->io_orig_size - HTDDT_HTSIZE(zio->io_orig_size), HTDDT_HTSIZE(zio->io_orig_size));
-	htddt_checksum_compute(spa, zp->zp_checksum, tabd, HTDDT_HTSIZE(zio->io_orig_size), &(tddk_search.htddk_cksum));
-	abd_free(tabd);
 
+	tddk_search.htddk_cksum = bp->blk_t_cksum;
 	tddk_search.htddk_type = HTDDT_TYPE_TAIL;
 	// compute head\tail's checksum and set htdde
 	htdde = htddt_lookup(tddt, &tddk_search, B_FALSE);
@@ -3360,7 +3351,7 @@ new_bste:
 	if(htdde->htdde_phys.htddp_dde->dde_lead_zio[htdde->htdde_phys.htddp_dde_p] != NULL){
 		/*
 		   we should create a new dde now and just view this block as a totally new block.
-		   We do not create any new htdde so that we are more likely to avoid this situation happen again.
+		   We do not create any new htdde so that we are more likely to avoid this situation happening again.
 		   Note that the new dde cannot be burst deduped because we do not create any htdde.
 		*/
 		zfs_burst_dedup_dbgmsg("=====burst-dedup=====not ready, new dde, zio: %px", zio);

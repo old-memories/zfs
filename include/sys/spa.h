@@ -431,6 +431,8 @@ typedef struct blkptr {
 	uint64_t	blk_birth;	/* transaction group at birth	    */
 	uint64_t	blk_fill;	/* fill count			    */
 	zio_cksum_t	blk_cksum;	/* 256-bit checksum		    */
+	zio_cksum_t blk_h_cksum;
+	zio_cksum_t blk_t_cksum;
 } blkptr_t;
 
 /*
