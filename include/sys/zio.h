@@ -475,6 +475,10 @@ struct zio {
 	uint64_t	io_size;
 	uint64_t	io_orig_size;
 
+	/* 256-bit checksum for burst dedup */
+	zio_cksum_t blk_h_cksum;
+	zio_cksum_t blk_t_cksum;
+
 	/* Stuff for the vdev stack */
 	vdev_t		*io_vd;
 	void		*io_vsd;
