@@ -45,7 +45,11 @@ typedef enum qat_encrypt_dir {
  * in the QAT hardware, but with the input buffer size between 4KB
  * and 128KB the hardware can provide the optimal performance.
  */
-#define	QAT_MIN_BUF_SIZE	(4*1024)
+
+/*
+ * We try to compute checksum of any size
+*/
+#define	QAT_MIN_BUF_SIZE	(1)
 #define	QAT_MAX_BUF_SIZE	(128*1024)
 
 /*
