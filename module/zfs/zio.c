@@ -2917,72 +2917,68 @@ zio_ddt_read_start(zio_t *zio)
 {
 	blkptr_t *bp = zio->io_bp;
 	ddt_t *ddt = ddt_select(zio->io_spa, bp);
+	bstt_t *bstt = bstt_select(zio->io_spa, bp);
+	bstt_entry_t *bste;
+	bstt_key_t bstk_search;
+	ddt_entry_t *bstp_dde;
+	uint8_t bstp_p;
+	ddt_phys_t *bstp_ddp;
+	burst_t *burst;
+	blkptr_t burst_blk;
+	blkptr_t based_blk;
+	abd_t *based_io_abd;
+	zio_t *based_io;
 
 	ASSERT(BP_GET_DEDUP(bp));
 	ASSERT(zio->io_child_type == ZIO_CHILD_LOGICAL);
+	
+	bstk_search.bstk_cksum = bp->blk_cksum;
 
-
-	if(BP_GET_COMPRESS(bp) != ZIO_COMPRESS_BURST){
+	/* this block have no burst data so just call zio_read() */
+	if (BP_GET_COMPRESS(bp) != ZIO_COMPRESS_BURST){
 		zio_nowait(zio_read(zio, zio->io_spa, bp, zio->io_abd, zio->io_size, NULL, NULL, zio->io_priority, ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark));
 		return (zio);	
 	}
-	else{
-		ddt_enter(ddt);
-		bstt_t *bstt = bstt_select(zio->io_spa, bp);
-		bstt_entry_t *bste;
-		bstt_key_t bstk_search;
-		bstk_search.bstk_cksum = bp->blk_cksum;
-		bste = bstt_lookup(bstt, &bstk_search, B_FALSE);
-		if(bste != NULL){
-			ddt_entry_t *bstp_dde = bste->bste_phys.bstp_dde;	
-			if(ddt_exist(ddt, bstp_dde)){
-				uint8_t bstp_p = bste->bste_phys.bstp_dde_p;
-				ddt_phys_t *bstp_ddp = &(bstp_dde->dde_phys[bstp_p]);
-		
-				if(bstp_dde->dde_lead_zio[bstp_p] != NULL){
-					zfs_burst_dedup_dbgmsg("=====burst-dedup=====based_data not ready, restart current zio: %px", zio);
-					zio_pop_transforms(zio);
-					zio->io_stage = ZIO_STAGE_OPEN;	
-					zio->io_pipeline = ZIO_READ_PIPELINE;
-					ddt_exit(ddt);
-					return (zio);
-				}
+	ddt_enter(ddt);
+	bste = bstt_lookup(bstt, &bstk_search, B_FALSE);
+	ASSERT(bste != NULL);
 
+	bstp_dde = bste->bste_phys.bstp_dde;	
+	bstp_p = bste->bste_phys.bstp_dde_p;
+	bstp_ddp = &(bstp_dde->dde_phys[bstp_p]);
 
-				burst_t *burst = &(bste->bste_phys.bstp_burst);
-
-				if(burst->burst_abd == NULL){
-					blkptr_t burst_blk;
-					bstt_bp_create(ddt->ddt_checksum, &(bste->bste_key), &(bste->bste_phys), &burst_blk);
-					
-					zfs_burst_dedup_dbgmsg("=====burst-dedup=====bste(%px) has empty burst_abd, load it first. zio: %px", bste, zio);
-					ASSERT3U(BP_GET_PSIZE(&burst_blk), ==, burst->burst_abd_size);
-					burst->burst_abd = abd_alloc(burst->burst_abd_size, B_FALSE);
-
-					zio_wait(zio_read(zio, zio->io_spa, &burst_blk, burst->burst_abd, burst->burst_abd_size, NULL, NULL, zio->io_priority, ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark));
-					
-				}
-				
-				blkptr_t based_blk;
-				ddt_bp_create(ddt->ddt_checksum, &(bstp_dde->dde_key), bstp_ddp, &based_blk);
-
-				abd_t *based_io_abd = abd_alloc(bste->bste_phys.bstp_abd_size, B_FALSE);
-
-				zio_t *based_io = zio_read(zio, zio->io_spa, &based_blk, based_io_abd, based_io_abd->abd_size, zio_ddt_based_read_done, burst, zio->io_priority,
-				ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark);	
-
-				ddt_exit(ddt);
-				zio_nowait(based_io);
-				return (zio);	
-			}
-		}
-		else{
-			zfs_burst_dedup_dbgmsg("=====burst-dedup=====no dde or bste found. ddt: %px, zio: %px", ddt, zio);
-		}
-		ddt_exit(ddt);	
-		return (zio);	
+	/* based_data not ready, restart current zio */
+	if (bstp_dde->dde_lead_zio[bstp_p] != NULL){
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====based_data not ready, restart current zio: %px", zio);
+		zio_pop_transforms(zio);
+		zio->io_stage = ZIO_STAGE_OPEN;	
+		zio->io_pipeline = ZIO_READ_PIPELINE;
+		ddt_exit(ddt);
+		return (zio);
 	}
 
+	burst = &(bste->bste_phys.bstp_burst);
+
+	if (burst->burst_abd == NULL){
+		zfs_burst_dedup_dbgmsg("=====burst-dedup=====bste(%px) has empty burst_abd, load it first. zio: %px", bste, zio);
+
+		bstt_bp_create(ddt->ddt_checksum, &(bste->bste_key), &(bste->bste_phys), &burst_blk);
+		ASSERT3U(BP_GET_PSIZE(&burst_blk), ==, burst->burst_abd_size);
+		burst->burst_abd = abd_alloc(burst->burst_abd_size, B_FALSE);
+
+		zio_wait(zio_read(zio, zio->io_spa, &burst_blk, burst->burst_abd, burst->burst_abd_size, NULL, NULL, zio->io_priority, ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark));
+		
+	}
+	
+	ddt_bp_create(ddt->ddt_checksum, &(bstp_dde->dde_key), bstp_ddp, &based_blk);
+
+	based_io_abd = abd_alloc(bste->bste_phys.bstp_abd_size, B_FALSE);
+	based_io = zio_read(zio, zio->io_spa, &based_blk, based_io_abd, based_io_abd->abd_size, zio_ddt_based_read_done, burst, zio->io_priority,
+	ZIO_DDT_CHILD_FLAGS(zio), &zio->io_bookmark);	
+
+	ddt_exit(ddt);
+	zio_nowait(based_io);
+	return (zio);	
 }
 
 static zio_t *
