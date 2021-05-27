@@ -3242,13 +3242,9 @@ zio_ddt_write(zio_t *zio)
 	htddt_key_t tddk_search;
 	bstt_key_t bstk_search;
 
-	int ht_abd_size;
-
 	// for debug usage
-	
 	boolean_t found_dde = B_FALSE;
 	
-
 	ASSERT(BP_GET_DEDUP(bp));
 	ASSERT(BP_GET_CHECKSUM(bp) == zp->zp_checksum);
 	ASSERT(BP_IS_HOLE(bp) || zio->io_bp_override);
@@ -3315,13 +3311,7 @@ zio_ddt_write(zio_t *zio)
 	}
 // --------------------------------------------------------------------------------------------
 	
-	ht_abd_size = P2ROUNDUP_TYPED(zio->io_orig_size >> zfs_burst_htdde_right_shift, 1, uint64_t);
-	
-	abd_t *habd = abd_alloc_linear(ht_abd_size, B_FALSE);
-	abd_copy_off(habd, zio->io_orig_abd, 0, 0, ht_abd_size);
-	htddt_checksum_compute(spa, zp->zp_checksum, habd, ht_abd_size, &(hddk_search.htddk_cksum));
-	abd_free(habd);
-	
+	hddk_search.htddk_cksum = zio->blk_h_cksum;
 	hddk_search.htddk_type = HTDDT_TYPE_HEAD;
 	// compute head\tail's checksum and set htdde
 	htdde = htddt_lookup(hddt, &hddk_search, B_FALSE);
@@ -3333,12 +3323,8 @@ zio_ddt_write(zio_t *zio)
 			}		
 		}
 	}
-	
-	abd_t *tabd = abd_alloc_linear(ht_abd_size, B_FALSE);
-	abd_copy_off(tabd, zio->io_orig_abd, 0, zio->io_orig_size - ht_abd_size, ht_abd_size);
-	htddt_checksum_compute(spa, zp->zp_checksum, tabd, ht_abd_size, &(tddk_search.htddk_cksum));
-	abd_free(tabd);
 
+	tddk_search.htddk_cksum = zio->blk_t_cksum;
 	tddk_search.htddk_type = HTDDT_TYPE_TAIL;
 	// compute head\tail's checksum and set htdde
 	htdde = htddt_lookup(tddt, &tddk_search, B_FALSE);
@@ -3359,7 +3345,7 @@ new_bste:
 	if(htdde->htdde_phys.htddp_dde->dde_lead_zio[htdde->htdde_phys.htddp_dde_p] != NULL){
 		/*
 		   we should create a new dde now and just view this block as a totally new block.
-		   We do not create any new htdde so that we are more likely to avoid this situation happen again.
+		   We do not create any new htdde so that we are more likely to avoid this situation happening again.
 		   Note that the new dde cannot be burst deduped because we do not create any htdde.
 		*/
 		zfs_burst_dedup_dbgmsg("=====burst-dedup=====not ready, new dde, zio: %px", zio);

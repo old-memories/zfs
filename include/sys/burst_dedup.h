@@ -35,9 +35,6 @@
 extern "C" {
 #endif
 
-#define HTDDT_HTSIZE(total_size) \
-    P2ROUNDUP_TYPED(total_size >> HTDDT_HT_RIGHTSHIFT, MIN_BLOCK_SIZE, uint64_t)
-
 extern int zfs_burst_htdde_right_shift;
 extern int zfs_burst_max_htdde_refcnt;
 
