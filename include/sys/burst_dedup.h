@@ -35,11 +35,11 @@
 extern "C" {
 #endif
 
-#define MIN_BLOCK_SIZE 1
-#define MAX_HTDDP_REFCNT 1
-#define HTDDT_HT_RIGHTSHIFT 3
 #define HTDDT_HTSIZE(total_size) \
     P2ROUNDUP_TYPED(total_size >> HTDDT_HT_RIGHTSHIFT, MIN_BLOCK_SIZE, uint64_t)
+
+extern int zfs_burst_htdde_right_shift;
+extern int zfs_burst_max_htdde_refcnt;
 
 typedef struct ddt_entry ddt_entry_t;
 

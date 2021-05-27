@@ -3242,6 +3242,8 @@ zio_ddt_write(zio_t *zio)
 	htddt_key_t tddk_search;
 	bstt_key_t bstk_search;
 
+	int ht_abd_size;
+
 	// for debug usage
 	
 	boolean_t found_dde = B_FALSE;
@@ -3313,35 +3315,36 @@ zio_ddt_write(zio_t *zio)
 	}
 // --------------------------------------------------------------------------------------------
 	
+	ht_abd_size = P2ROUNDUP_TYPED(zio->io_orig_size >> zfs_burst_htdde_right_shift, 1, uint64_t);
 	
-	abd_t *habd = abd_alloc_linear(HTDDT_HTSIZE(zio->io_orig_size), B_FALSE);
-	abd_copy_off(habd, zio->io_orig_abd, 0, 0, HTDDT_HTSIZE(zio->io_orig_size));
-	htddt_checksum_compute(spa, zp->zp_checksum, habd, HTDDT_HTSIZE(zio->io_orig_size), &(hddk_search.htddk_cksum));
+	abd_t *habd = abd_alloc_linear(ht_abd_size, B_FALSE);
+	abd_copy_off(habd, zio->io_orig_abd, 0, 0, ht_abd_size);
+	htddt_checksum_compute(spa, zp->zp_checksum, habd, ht_abd_size, &(hddk_search.htddk_cksum));
 	abd_free(habd);
 	
 	hddk_search.htddk_type = HTDDT_TYPE_HEAD;
 	// compute head\tail's checksum and set htdde
 	htdde = htddt_lookup(hddt, &hddk_search, B_FALSE);
-	// found hdde and refcnt < MAX_HTDDP_REFCNT
+	// found hdde and refcnt < zfs_burst_max_htdde_refcnt
 	if(htdde != NULL){
-		if(htdde->htdde_phys.htddp_refcnt < (uint64_t)MAX_HTDDP_REFCNT){
+		if(htdde->htdde_phys.htddp_refcnt < (uint64_t)zfs_burst_max_htdde_refcnt){
 			if(ddt_exist(ddt, htdde->htdde_phys.htddp_dde)){
 				goto new_bste;
 			}		
 		}
 	}
 	
-	abd_t *tabd = abd_alloc_linear(HTDDT_HTSIZE(zio->io_orig_size), B_FALSE);
-	abd_copy_off(tabd, zio->io_orig_abd, 0, zio->io_orig_size - HTDDT_HTSIZE(zio->io_orig_size), HTDDT_HTSIZE(zio->io_orig_size));
-	htddt_checksum_compute(spa, zp->zp_checksum, tabd, HTDDT_HTSIZE(zio->io_orig_size), &(tddk_search.htddk_cksum));
+	abd_t *tabd = abd_alloc_linear(ht_abd_size, B_FALSE);
+	abd_copy_off(tabd, zio->io_orig_abd, 0, zio->io_orig_size - ht_abd_size, ht_abd_size);
+	htddt_checksum_compute(spa, zp->zp_checksum, tabd, ht_abd_size, &(tddk_search.htddk_cksum));
 	abd_free(tabd);
 
 	tddk_search.htddk_type = HTDDT_TYPE_TAIL;
 	// compute head\tail's checksum and set htdde
 	htdde = htddt_lookup(tddt, &tddk_search, B_FALSE);
-	// found tdde and refcnt < MAX_HTDDP_REFCNT
+	// found tdde and refcnt < zfs_burst_max_htdde_refcnt
 	if(htdde != NULL){
-		if(htdde->htdde_phys.htddp_refcnt < (uint64_t)MAX_HTDDP_REFCNT){
+		if(htdde->htdde_phys.htddp_refcnt < (uint64_t)zfs_burst_max_htdde_refcnt){
 			if(ddt_exist(ddt, htdde->htdde_phys.htddp_dde)){
 				goto new_bste;
 			}	

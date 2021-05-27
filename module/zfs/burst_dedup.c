@@ -33,6 +33,9 @@
 #include <sys/zio_checksum.h>
 #include <sys/abd.h>
 #include <sys/burst_dedup.h>
+#if defined(_KERNEL)
+#include <linux/mod_compat.h>
+#endif
 #include <sys/cmn_err.h>
 
 static kmem_cache_t *htddt_cache;
@@ -40,6 +43,8 @@ static kmem_cache_t *htddt_entry_cache;
 static kmem_cache_t *bstt_cache;
 static kmem_cache_t *bstt_entry_cache;
 
+int zfs_burst_htdde_right_shift = 3;
+int zfs_burst_max_htdde_refcnt = 1;
 
 
 static htddt_entry_t *
@@ -554,3 +559,25 @@ bstt_create_data(burst_t *burst, abd_t *based_data, uint64_t based_data_size, ab
 	zfs_burst_dedup_dbgmsg("=====burst-dedup=====burst: burst_abd: %px, start_pos: %d, end_pos: %d, length: %lu, roundup to: %llu", burst->burst_abd, burst->start_pos, burst->end_pos, burst->length, burst->burst_abd_size);
 
 }
+
+#if defined(_KERNEL)
+static int
+param_set_burst_int(const char *buf, zfs_kernel_param_t *kp)
+{
+	int error;
+
+	error = param_set_int(buf, kp);
+	if (error < 0)
+		return (SET_ERROR(error));
+
+	return (0);
+}
+
+module_param_call(zfs_burst_htdde_right_shift, param_set_burst_int,
+    param_get_int, &zfs_burst_htdde_right_shift, 0644);
+MODULE_PARM_DESC(zfs_burst_htdde_right_shift, "head && tail size = total size >> this value");
+
+module_param_call(zfs_burst_max_htdde_refcnt, param_set_burst_int,
+    param_get_int, &zfs_burst_max_htdde_refcnt, 0644);
+MODULE_PARM_DESC(zfs_burst_max_htdde_refcnt, "max reference count for one head/tail dde");
+#endif
